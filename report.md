@@ -7,7 +7,7 @@
 |---|---|---|---|
 | 0 | สมาชิกและการแบ่งงาน | M1 + ทุกคน | ⬜ |
 | 1 | Problem Framing & AI Project Canvas | M1 | ✅ |
-| 2 | Data Ingestion, Split & Validation | M2 | 🟨 |
+| 2 | Data Ingestion, Split & Validation | M2 | ✅ |
 | 3 | Feature Engineering | M3 | ⬜ |
 | 4 | Model Development & Experiment Tracking | M3 | ⬜ |
 | 5 | Model Registry, Gate & Rollback | M4 | ⬜ |
@@ -84,7 +84,7 @@ pytest -q tests/test_smoke.py
 ---
 
 ## §2 Data Ingestion, Split & Validation
-**ผู้รับผิดชอบ:** M2 (@NongPP235) · **Reviewer:** M1 (@nattapongsric-collab) · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M2 (@NongPP235) · **Reviewer:** M1 (@nattapongsric-collab) · **PR:** #6 · **วันที่เสร็จ:** 2026-10-04
 
 ### สิ่งที่ทำ
 - `src/ingest.py` — อ่าน csv ดิบระดับ transaction → ทำความสะอาด → รวมเป็นตาราง `date × article × qty`
@@ -113,7 +113,16 @@ pytest -q tests/test_smoke.py
 - `python -m src.validate data/samples/good_sales.csv` → **exit 0**
 - `ruff check .` ผ่าน · `pytest -q` ผ่าน 16 tests
 - ทดสอบ `ingest → validate → split` ครบวงจรกับไฟล์ดิบจำลองรูปแบบเดียวกับ Kaggle (20 สินค้า, 2021-01-02 ถึง 2022-09-30) → ได้ 15 สินค้า × 637 วัน, validate ผ่าน, split ไม่มีชุดว่าง
-- TODO(M2): รันกับไฟล์ Kaggle จริงแล้วเติมตัวเลข: จำนวนแถวที่ตัด, จำนวนแถวที่ cap, ช่วงวันที่, รายชื่อ 15 สินค้า, data version, ขนาดชุด train/val/test + screenshot ผลไฟล์เสียใน `docs/evidence/`
+- **ผลกับข้อมูลจริง (Kaggle Bakery sales.csv):**
+  - clean: ตัดแถวเสีย 5 แถว, ตัดแถวคืนของ (qty <= 0) 1,295 แถว → เหลือ 232,705 transactions
+  - cap ที่ Q99.9 (เพดานจากช่วง train) 34 แถว
+  - ได้ 9,555 แถว = 15 สินค้า × 637 วัน (2021-01-02 ถึง 2022-09-30)
+  - data version (SHA256): `af5eede55b6eb2efb6bebb0e6dd1a51568c7eb73554d2f8ad2563081025681b2`
+  - 15 สินค้า: BAGUETTE, BANETTE, BOULE 400G, CAMPAGNE, CEREAL BAGUETTE, COOKIE, COUPE, CROISSANT, ECLAIR, FORMULE SANDWICH, PAIN AU CHOCOLAT, SPECIAL BREAD, TARTELETTE, TRADITIONAL BAGUETTE, VIK BREAD
+  - สถิติช่วง train (ใช้ตรวจ anomaly): mean 27.44, std 50.61, max 538 ชิ้น/วัน
+  - `python -m src.validate` กับไฟล์ processed → PASSED
+  - split: train 2021-01-02 → 2022-06-30 (8,175 แถว) · val 2022-07-01 → 2022-08-31 (930 แถว) · test 2022-09-01 → 2022-09-30 (450 แถว)
+  - screenshot ไฟล์เสียถูกจับ: `docs/evidence/p2_bad_data_caught.png`
 
 ### ปัญหาที่เจอและวิธีแก้
 - CI ไม่มีไฟล์ข้อมูลจริง (gitignored) จึงไม่มี `meta.json` → ให้ `validate` ใช้ `data/samples/meta.json` แทนอัตโนมัติเมื่อยังไม่เคยรัน ingest
