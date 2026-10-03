@@ -5,7 +5,7 @@
 
 | § | ขั้น | ผู้รับผิดชอบ | สถานะ |
 |---|---|---|---|
-| 0 | สมาชิกและการแบ่งงาน | M1 + ทุกคน | ⬜ |
+| 0 | สมาชิกและการแบ่งงาน | M1 + ทุกคน | 🟨 |
 | 1 | Problem Framing & AI Project Canvas | M1 | ⬜ |
 | 2 | Data Ingestion, Split & Validation | M2 | ⬜ |
 | 3 | Feature Engineering | M3 | ⬜ |
@@ -25,7 +25,7 @@
 
 | รหัส | ชื่อ-สกุล | รหัสนักศึกษา | GitHub | บทบาท |
 |---|---|---|---|---|
-| M1 | | | | Project Lead / Framing / Report |
+| M1 | | | @fxlmholy | Project Lead / Framing / Report |
 | M2 | | | | Data Engineer |
 | M3 | | | | ML Engineer |
 | M4 | | | | Serving Engineer |
