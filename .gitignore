@@ -27,3 +27,6 @@ reports/*.html
 .DS_Store
 Thumbs.db
 mlflow_data/
+
+# Logs (validation alerts)
+logs/
