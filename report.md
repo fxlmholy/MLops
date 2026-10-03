@@ -25,7 +25,7 @@
 
 | รหัส | ชื่อ-สกุล | รหัสนักศึกษา | GitHub | บทบาท |
 |---|---|---|---|---|
-| M1 | | | | Project Lead / Framing / Report |
+| M1 | | 67xxxxxxxx | @nattapongsric-collab | Project Lead / Framing / Report |
 | M2 | | | | Data Engineer |
 | M3 | | | | ML Engineer |
 | M4 | | | | Serving Engineer |
