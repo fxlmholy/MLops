@@ -34,7 +34,7 @@
 ---
 
 ## §1 Problem Framing & AI Project Canvas
-**ผู้รับผิดชอบ:** M1 (@nattapongsric-collab) · **Reviewer:** M5 (@thanachotkam-hue) · **PR:** # · **วันที่เสร็จ:** 2026-10-04
+**ผู้รับผิดชอบ:** M1 (@nattapongsric-collab) · **Reviewer:** M5 (@thanachotkam-hue) · **PR:** #2 · **วันที่เสร็จ:** 2026-10-04
 
 ### สิ่งที่ทำ
 - เขียน AI Project Canvas ครบทุกช่อง → [`docs/ai_project_canvas.md`](docs/ai_project_canvas.md)
