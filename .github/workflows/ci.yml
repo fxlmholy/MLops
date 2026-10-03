@@ -1,0 +1,34 @@
+name: CI
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  code-quality:            # ด้านที่ 1: คุณภาพโค้ด
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -r requirements.txt
+      - run: ruff check .
+      - run: pytest -q
+
+  data-validation:         # ด้านที่ 2: ความถูกต้องของข้อมูล — TODO(M5/P8) เปิดใช้เมื่อ src.validate เสร็จ
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install -r requirements.txt
+      - run: echo "TODO(P8) python -m src.validate data/samples/good_sales.csv (ต้องผ่าน) และไฟล์ bad ต้องถูกจับ"
+
+  model-gate:              # ด้านที่ 3: เกณฑ์คุณภาพโมเดล — TODO(M5/P8)
+    runs-on: ubuntu-latest
+    needs: data-validation
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "TODO(P8) เทรนบน sample แล้วรัน src.evaluate_gate ต้องผ่าน gating metric"

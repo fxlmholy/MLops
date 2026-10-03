@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+.ruff_cache/
+
+# Data (ไม่ commit ข้อมูลจริง)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# MLflow / Prefect / outputs
+mlruns/
+mlartifacts/
+mlflow.db
+artifacts/
+reports/*.html
+.prefect/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+mlflow_data/

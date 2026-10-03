@@ -1,0 +1,42 @@
+# ค่าทั้งหมดของโปรเจค — แก้ที่นี่ที่เดียว
+seed: 42
+
+paths:
+  raw: data/raw/Bakery sales.csv
+  processed: data/processed/daily_sales.parquet
+  samples_good: data/samples/good_sales.csv
+  samples_bad: data/samples/bad_sales.csv
+
+data:
+  top_n_items: 15          # เลือกสินค้าขายดี N อันดับแรก
+  outlier_quantile: 0.999  # cap ยอดที่เกิน quantile นี้
+
+split:                     # แบ่งตามเวลา (ห้ามสุ่ม) — TODO(M2): ปรับตามช่วงวันที่จริงของข้อมูล
+  train_end: "2022-06-30"
+  val_end: "2022-08-31"    # test = หลัง val_end
+
+features:
+  lags: [1, 7, 14]
+  rolling_windows: [7, 28]
+  holiday_country: FR
+
+model:
+  quantile_default: 0.6    # ใช้เมื่อไม่ส่งราคา/ต้นทุนมา
+
+gate:                      # Gating metrics — ต้องผ่านทุกข้อจึง promote
+  min_improvement_vs_naive: 0.10   # WAPE ต้องดีกว่า seasonal-naive >= 10%
+  max_model_size_mb: 50
+
+slo:
+  p95_latency_ms: 200
+  error_rate: 0.01
+  availability: 0.99
+
+monitoring:
+  psi_threshold: 0.2              # data drift
+  wape_degradation_ratio: 1.2     # concept drift: WAPE_7d > 1.2 x WAPE ตอน deploy
+
+mlflow:
+  tracking_uri: http://localhost:5000
+  experiment: bakery-demand
+  model_name: bakery-demand-model
