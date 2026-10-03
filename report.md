@@ -15,8 +15,8 @@
 | 7 | Monitoring, Drift & Retraining | M5 | ⬜ |
 | 8 | Pipeline DAG | M2 | ⬜ |
 | 9 | CI/CD | M5 | ⬜ |
-| 10 | Architecture, Reproducibility & สรุป | M1 | ⬜ |
-| 11 | สรุปการใช้ AI (รวมจากทุก section) | M1 | ⬜ |
+| 10 | Architecture, Reproducibility & สรุป | M1 | 🟨 |
+| 11 | สรุปการใช้ AI (รวมจากทุก section) | M1 | 🟨 |
 
 ---
 
@@ -163,16 +163,85 @@
 ---
 
 ## §10 Architecture, Reproducibility & สรุป
-**ผู้รับผิดชอบ:** M1 · **Reviewer:** M5 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M1 (@nattapongsric-collab) · **Reviewer:** M5 (@thanachotkam-hue) · **PR:** # · **วันที่เสร็จ:** (รอทดสอบเครื่องเปล่า)
 
 ### แผนภาพสถาปัตยกรรม
+![Architecture](docs/architecture.png)
+
+ระบบแบ่งเป็น 5 ส่วน:
+
+| ส่วน | หน้าที่ | เครื่องมือ | ผู้รับผิดชอบ |
+|---|---|---|---|
+| Training pipeline | ingest → validate → split → features → train → gate → register รันด้วยคำสั่งเดียว | Prefect 2, Pandera, LightGBM | M2, M3, M4 |
+| Experiment tracking & Registry | log ครบ 6 อย่าง (code, data, params, metrics, artifacts, env) และจัดการ alias `champion`/`challenger` | MLflow | M3, M4 |
+| Serving | Batch ทุกคืนก่อน 06:00 + Real-time API, คำนวณจำนวนที่ควรเตรียมแบบ newsvendor | FastAPI, Docker compose | M4 |
+| Monitoring & Retraining | system health, data drift (PSI), concept drift (rolling WAPE) → alert → retrain | Prometheus, Grafana, Evidently | M5 |
+| CI/CD | code quality, data validation, model gate, build image ทุก PR | GitHub Actions | M5 |
+
+**จุดออกแบบสำคัญ**
+- **กัน Training–Serving skew:** ทั้ง training และ API เรียก `build_features()` จาก `src/features.py` ที่เดียว
+- **ข้อมูลเสียไม่หลุดเข้าโมเดล:** validate ไม่ผ่าน → flow หยุดก่อน train
+- **โมเดลแย่ไม่ถูก deploy:** ต้องผ่าน gate ทุกข้อใน `configs/config.yaml` → `gate`
+- **ย้อนกลับได้ทันที:** rollback = ย้าย alias `champion` ใน MLflow Registry ไม่ต้อง build ใหม่
+- **ปิดวงจร:** monitoring ตรวจพบ drift → trigger training flow → gate → registry → API โหลด champion ใหม่
+
+### Reproducibility
+| สิ่งที่ล็อกไว้ | วิธี |
+|---|---|
+| Random seed | `seed: 42` ใน `configs/config.yaml` |
+| Library | pin ทุกตัวด้วย `==` ใน `requirements.txt` |
+| Code version | `git rev-parse HEAD` → MLflow tag |
+| Data version | SHA256 ของไฟล์ raw → MLflow tag |
+| Environment | Python 3.11 (conda) + Docker image `python:3.11-slim` |
+| การแบ่งข้อมูล | แบ่งตามวันที่ใน config (ไม่สุ่ม) |
+| ค่าตั้งทั้งหมด | `configs/config.yaml` ไฟล์เดียว |
+
 ### ผลทดสอบรันจากเครื่องเปล่า
+> ทำหลังทุก phase merge เข้า `dev` — สมาชิก 1 คน clone ใหม่บนเครื่องที่ไม่เคยรัน แล้วทำตาม README ทีละขั้น
+
+| ขั้นตอนใน README | ผล | หมายเหตุ / สิ่งที่ต้องแก้ |
+|---|---|---|
+| clone + `pip install -r requirements.txt` | ⬜ | |
+| วาง `data/raw/Bakery sales.csv` | ⬜ | |
+| `docker compose up -d --build` | ⬜ | |
+| `make pipeline` | ⬜ | |
+| `curl /recommend` | ⬜ | |
+| `python -m src.validate data/samples/bad_sales.csv` ล้ม | ⬜ | |
+
+ผู้ทดสอบ: · เครื่อง/OS: · วันที่:
+
 ### สรุปผลเชิงธุรกิจ
+> ตัวเลขดึงจาก §4 (M3) เมื่อการทดลองเสร็จ
+
+| ตัวชี้วัด | Seasonal-naive (rule) | โมเดลที่เลือก | เปลี่ยนแปลง |
+|---|---|---|---|
+| WAPE | | | |
+| Stockout rate | | | |
+| Waste rate | | | |
+| Lost profit / วัน | | | |
+
 ### ข้อจำกัดและงานในอนาคต
+- **ข้อมูลจากร้านเดียว ช่วง 2021–2022** — โมเดลอาจใช้กับร้านอื่นหรือช่วงเวลาอื่นไม่ได้ทันที ต้องเทรนใหม่ด้วยข้อมูลของร้านนั้น
+- **ไม่มีข้อมูลสต็อกจริง** — ยอดขายที่เห็นคือยอดที่ขายได้ ไม่ใช่ความต้องการจริง วันที่ของหมดเร็วจะทำให้ประเมินความต้องการต่ำไป (censored demand)
+- **ไม่มี feature ภายนอก** เช่น สภาพอากาศ, โปรโมชัน, อีเวนต์ในพื้นที่ — อนาคตเพิ่มได้ผ่าน `build_features()`
+- **ต้นทุนสินค้าเป็นค่าสมมุติ** — q ของ newsvendor ขึ้นกับราคา/ต้นทุน ถ้าใช้จริงต้องใช้ต้นทุนจริงของร้าน
+- **รันบนเครื่องเดียว** — ถ้าขยายหลายสาขา ควรแยก MLflow/DB ไปที่ server กลางและใช้ Prefect work pool
 
 ---
 
 ## §11 สรุปการใช้ AI
+> M1 รวบรวมจากหัวข้อ "การใช้ AI" ของทุก section — แต่ละคนกรอกแถวของตัวเองใน section ของตัวเองก่อน แล้ว M1 สรุปมาที่นี่
+
 | ส่วนของงาน | เครื่องมือ AI | ใช้ช่วยทำอะไร | ผู้ตรวจสอบ/อธิบายได้ |
 |---|---|---|---|
-| | | | |
+| P0 Setup | Claude Code | ตั้งค่า git (ชื่อ/อีเมล), แตก branch, ช่วยเปิด PR | M1 |
+| §1 Problem Framing | Claude Code | ร่างคำตอบ 5 คำถาม, เหตุผลเลือก metric, จัดตาราง metric/gate/SLO | M1 |
+| §10 Architecture & README | Claude Code | ร่างแผนภาพสถาปัตยกรรม (สคริปต์ matplotlib), ปรับ README, ร่าง §10 | M1 |
+| §2 Data | (รอ M2) | | M2 |
+| §3–§4 Features & Model | (รอ M3) | | M3 |
+| §5–§6 Registry & Serving | (รอ M4) | | M4 |
+| §7 Monitoring | (รอ M5) | | M5 |
+| §8 Pipeline DAG | (รอ M2) | | M2 |
+| §9 CI/CD | (รอ M5) | | M5 |
+
+**หลักการที่ทีมใช้:** AI ช่วยร่างโค้ด/เอกสารได้ แต่เจ้าของงานต้องอ่านทุกบรรทัด รันทดสอบเอง และอธิบายได้ตอนนำเสนอ (CLAUDE.md §1 ข้อ 6)
