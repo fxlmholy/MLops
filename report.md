@@ -173,12 +173,12 @@ conda run -n mlops-m3 python -m pytest tests/test_features.py -v
 ### สิ่งที่ทำ พัฒนา src/train.py สำหรับเตรียมข้อมูลยอดขายรายวัน สร้าง Features ฝึกโมเดล 4 แบบ และบันทึกผลการทดลองด้วย MLflow ได้แก่ Seasonal-naive, Linear Regression, LightGBM default และ LightGBM tuned โดยบันทึกพารามิเตอร์ ตัวชี้วัด รุ่นโค้ด ค่า SHA256 ของ Dataset เวอร์ชัน Python ไฟล์ requirements.txt รายการ Features โมเดล กราฟ Actual vs Predicted และผลวิเคราะห์ SHAP สำหรับโมเดลที่รองรับ
 ### การตัดสินใจและเหตุผล ใช้ WAPE เป็นตัวชี้วัดหลักสำหรับเปรียบเทียบโมเดลบน Validation set เนื่องจากต้องการประเมินความคลาดเคลื่อนเทียบกับยอดขายจริง เลือกโมเดลจากผล Validation และใช้ Test set สำหรับรายงานผลประเมินขั้นสุดท้ายเท่านั้น
 ### ผลลัพธ์ / หลักฐาน
-| Run | โมเดล | Hyperparams | WAPE | MAE | Pinball@q | Stockout | Waste | ผ่าน Gate? |
-|---|---|---|---|---|---|---|---|---|
-| 1 | Seasonal-naive |lag=7 |0.367764| 2.508227| 1.268413| 1.325612| 1.182615| ยังไม่ยืนยัน|
-| 2 | Linear Regression |StandardScaler + LinearRegression| 0.321740| 2.194328| 1.096773| 1.095211| 1.099117| ยังไม่ยืนยัน|
-| 3 | LightGBM default | random_state=42 | 0.271485| 1.851584| 0.945858| 1.026123| 0.825461| ยังไม่ยืนยัน|
-| 4 | LightGBM tuned | objective=quantile, alpha=0.6, n_estimators=300, learning_rate=0.03, num_leaves=31|       0.296807| 2.024280| 1.047296| 1.187919| 0.836361| ยังไม่ยืนยัน|
+ Run | โมเดล | Hyperparams | WAPE | MAE | Pinball@q | Stockout | Waste | ผ่าน Gate? |
+|---|---|---|---:|---:|---:|---:|---:|---|
+| 1 | Seasonal-naive | lag=7 | 0.367764 | 2.508227 | 1.268413 | 1.325612 | 1.182615 | ยังไม่ยืนยัน |
+| 2 | Linear Regression | StandardScaler + LinearRegression | 0.321740 | 2.194328 | 1.096773 | 1.095211 | 1.099117 | ยังไม่ยืนยัน |
+| 3 | LightGBM default | random_state=42 | 0.271485 | 1.851584 | 0.945858 | 1.026123 | 0.825461 | ยังไม่ยืนยัน |
+| 4 | LightGBM tuned | objective=quantile, alpha=0.6, n_estimators=300, learning_rate=0.03, num_leaves=31 | 0.296807 | 2.024280 | 1.047296 | 1.187919 | 0.836361 | ยังไม่ยืนยัน |
 
   ### ปัญหาที่เจอและวิธีแก้ 
 ปัญหาการติดตามผลการทดลอง: ต้องเปรียบเทียบผลลัพธ์ของโมเดลทั้ง 4 แบบ จึงใช้ MLflow บันทึกพารามิเตอร์ ตัวชี้วัด และ artifacts ของแต่ละการทดลอง เพื่อให้สามารถตรวจสอบและเปรียบเทียบผลได้

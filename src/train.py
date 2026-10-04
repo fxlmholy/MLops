@@ -93,51 +93,6 @@ def evaluate(y_true, y_pred, quantile=0.6) -> dict:
     }
 
 
-def prepare_daily_data(raw: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate transactions into daily demand per item."""
-    required = {"date", "article", "Quantity"}
-    missing = required - set(raw.columns)
-
-    if missing:
-        raise ValueError(f"Missing columns: {sorted(missing)}")
-
-    data = raw[["date", "article", "Quantity"]].copy()
-    data["date"] = pd.to_datetime(data["date"], errors="raise")
-    data["article"] = data["article"].astype("string").str.strip()
-    data["qty"] = pd.to_numeric(data["Quantity"], errors="raise")
-
-    data = data.drop(columns="Quantity")
-    data = data.dropna(subset=["date", "article", "qty"])
-    data = data[data["article"] != ""]
-    data = data[data["qty"] >= 0]
-
-    daily = (
-        data.groupby(["date", "article"], as_index=False)["qty"]
-        .sum()
-    )
-
-    if daily.empty:
-        raise ValueError("No valid sales data remains after cleaning.")
-
-    all_dates = pd.date_range(
-        daily["date"].min(),
-        daily["date"].max(),
-        freq="D",
-    )
-    all_items = sorted(daily["article"].unique().tolist())
-
-    full_index = pd.MultiIndex.from_product(
-        [all_dates, all_items],
-        names=["date", "article"],
-    )
-
-    return (
-        daily.set_index(["date", "article"])
-        .reindex(full_index, fill_value=0)
-        .reset_index()
-    )
-
-
 def save_prediction_plot(
     y_true,
     y_pred,
@@ -175,7 +130,6 @@ def log_shap_artifacts(model, X_test, model_name: str) -> None:
     explainer = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(sample)
 
-    # Summary plot showing feature impact.
     shap.summary_plot(
         shap_values,
         sample,
@@ -199,7 +153,6 @@ def log_shap_artifacts(model, X_test, model_name: str) -> None:
         plt.close("all")
         summary_path.unlink(missing_ok=True)
 
-    # Mean absolute SHAP value for each feature.
     values = np.asarray(shap_values)
 
     if values.ndim == 3:
@@ -225,21 +178,36 @@ def log_shap_artifacts(model, X_test, model_name: str) -> None:
 
 
 def main() -> None:
-    """Train four models and log results to MLflow."""
+    """Train four models using M2 processed data and track with MLflow."""
     config = load_config()
-    raw_path = ROOT / config["paths"]["raw"]
 
-    if not raw_path.exists():
-        raise FileNotFoundError(f"Dataset not found: {raw_path}")
-
-    raw = pd.read_csv(raw_path)
-    daily = prepare_daily_data(raw)
-
+    # Load the processed dataset created by M2.
     processed_path = ROOT / config["paths"]["processed"]
-    processed_path.parent.mkdir(parents=True, exist_ok=True)
-    daily.to_parquet(processed_path, index=False)
 
-    # Use the shared feature engineering path.
+    if not processed_path.exists():
+        raise FileNotFoundError(
+            f"Processed dataset not found: {processed_path}. "
+            "Run the M2 ingestion pipeline first."
+        )
+
+    daily = pd.read_parquet(processed_path)
+
+    required_columns = {"date", "article", "qty"}
+    missing_columns = required_columns - set(daily.columns)
+
+    if missing_columns:
+        raise ValueError(
+            "Processed dataset is missing columns: "
+            f"{sorted(missing_columns)}"
+        )
+
+    if daily.empty:
+        raise ValueError("Processed dataset is empty.")
+
+    daily["date"] = pd.to_datetime(daily["date"], errors="raise")
+    daily["qty"] = pd.to_numeric(daily["qty"], errors="raise")
+
+    # Do not reprocess or overwrite M2's Parquet file.
     featured = build_features(daily)
     featured = featured.replace([np.inf, -np.inf], np.nan)
     featured = featured.dropna(
@@ -311,9 +279,9 @@ def main() -> None:
             mlflow.set_tags(
                 {
                     "git_commit": git_commit(),
-                    "data_sha256": file_sha256(raw_path),
+                    "data_sha256": file_sha256(processed_path),
                     "python_version": sys.version.split()[0],
-                    "data_path": str(raw_path.relative_to(ROOT)),
+                    "data_path": str(processed_path.relative_to(ROOT)),
                 }
             )
 
@@ -327,7 +295,7 @@ def main() -> None:
                 }
             )
 
-            # Environment and feature-list artifacts.
+            # Log environment and feature list.
             if requirements_path.exists():
                 mlflow.log_artifact(
                     str(requirements_path),
@@ -339,7 +307,7 @@ def main() -> None:
                 "feature_list.json",
             )
 
-            # Fit the model and predict both validation and test sets.
+            # Fit and predict on validation and test sets.
             if model is None:
                 val_predictions = val["lag_7"].to_numpy(dtype=float)
                 test_predictions = test["lag_7"].to_numpy(dtype=float)
@@ -372,7 +340,7 @@ def main() -> None:
                         artifact_path="model",
                     )
 
-            # Log validation metrics.
+            # Validation metrics.
             val_metrics = evaluate(
                 y_val,
                 val_predictions,
@@ -380,7 +348,7 @@ def main() -> None:
             )
             mlflow.log_metrics(val_metrics)
 
-            # Log test metrics with a test_ prefix.
+            # Test metrics.
             test_metrics = evaluate(
                 y_test,
                 test_predictions,
@@ -393,7 +361,7 @@ def main() -> None:
                 }
             )
 
-            # Save validation and test prediction plots.
+            # Actual-versus-predicted plots.
             for split_name, actual, predicted in [
                 ("validation", y_val, val_predictions),
                 ("test", y_test, test_predictions),
@@ -413,7 +381,7 @@ def main() -> None:
                 finally:
                     plot_path.unlink(missing_ok=True)
 
-            # SHAP explanations for LightGBM models only.
+            # SHAP explanations for LightGBM models.
             if name.startswith("lightgbm"):
                 log_shap_artifacts(
                     model,
