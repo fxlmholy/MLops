@@ -133,7 +133,8 @@ def status(client: MlflowClient | None = None, name: str | None = None) -> list[
     client = client or get_client()
     name = name or model_name()
     rows = []
-    for mv in sorted(client.search_model_versions(f"name='{name}'"), key=lambda m: int(m.version)):
+    for found in sorted(client.search_model_versions(f"name='{name}'"), key=lambda m: int(m.version)):
+        mv = client.get_model_version(name, found.version)  # search ไม่คืน aliases → ดึงทีละเวอร์ชัน
         rows.append({
             "version": mv.version,
             "aliases": ",".join(mv.aliases),

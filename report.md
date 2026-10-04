@@ -10,7 +10,7 @@
 | 2 | Data Ingestion, Split & Validation | M2 | ✅ |
 | 3 | Feature Engineering | M3 | ⬜ |
 | 4 | Model Development & Experiment Tracking | M3 | ⬜ |
-| 5 | Model Registry, Gate & Rollback | M4 | ⬜ |
+| 5 | Model Registry, Gate & Rollback | M4 | ✅ |
 | 6 | Serving, Infrastructure & Load Test | M4 | ⬜ |
 | 7 | Monitoring, Drift & Retraining | M5 | ⬜ |
 | 8 | Pipeline DAG | M2 | ⬜ |
@@ -176,14 +176,60 @@ pytest -q tests/test_data.py
 ---
 
 ## §5 Model Registry, Gate & Rollback
-**ผู้รับผิดชอบ:** M4 · **Reviewer:** M3 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M4 (@fxlmholy) · **Reviewer:** M3 · **PR:** # · **วันที่เสร็จ:** 2026-10-04
 
 ### สิ่งที่ทำ
+- `src/evaluate_gate.py` — ด่านตรวจก่อนอนุมัติโมเดล อ่านผลจาก MLflow run ที่ `train.py` (M3) log ไว้
+  1. หา run ล่าสุดของแต่ละโมเดล → baseline = `seasonal_naive`
+  2. เลือก candidate ที่มีโมเดลและ **WAPE (validation) ต่ำสุด** (หรือระบุ `--run-id`)
+  3. ตรวจ gate จาก `configs/config.yaml`: WAPE ดีกว่า seasonal-naive ≥ 10% · ขนาดโมเดล < 50 MB · (p95 latency < 200 ms เมื่อส่งค่าจาก load test มา)
+  4. ไม่ผ่าน → **ไม่ลงทะเบียน** และ exit code 1 (ใช้ใน CI/flow ให้หยุดได้)
+  5. ผ่าน → ลงทะเบียนเวอร์ชันใหม่ alias `challenger` → ถ้า WAPE ดีกว่า `champion` → promote
+- `src/registry.py` — `status` / `promote <v>` / `rollback` ด้วย MLflow alias + tag `status` (`challenger` / `champion` / `archived`) และเก็บประวัติ champion ใน tag `champion_history` ของ registered model
+- API (§6) มี `POST /reload` → หลัง promote/rollback โหลด champion ใหม่ได้โดยไม่ต้อง restart
+- `tests/test_registry_gate.py` — ทดสอบกฎ gate, เคส promote / v2 แย่กว่าไม่ถูก promote / gate ไม่ผ่านไม่ลงทะเบียน / rollback / run ที่ไม่มีโมเดลลงทะเบียนไม่ได้ (ใช้ MLflow file store ใน tmp ไม่ต้องเปิด server)
+
 ### การตัดสินใจและเหตุผล
+- **ใช้ alias แทน stage** (Staging/Production) เพราะ MLflow 2.9+ เลิกแนะนำ stage แล้ว และการย้าย alias เป็นคำสั่งเดียว → rollback ทำได้ทันที
+- **เก็บประวัติ champion เอง** (tag `champion_history`) แทนการเดาว่า "เวอร์ชันก่อน = version−1" เพราะเวอร์ชันที่ถูก reject (ค้างเป็น challenger) ไม่ควรถูก rollback กลับไปใช้
+- **เลือกโมเดลจาก validation WAPE** ตามที่ M1 กำหนด (`metrics.optimizing: wape`); test set ใช้รายงานผลเท่านั้น ไม่ใช้ตัดสิน
+- **เทียบกับ champion ด้วย WAPE ที่ log ไว้ใน run** (ไม่ประเมินใหม่) เพื่อให้ gate เร็วและไม่ต้องโหลดข้อมูล — ข้อจำกัด: ถ้า champion เทรนบนข้อมูลคนละชุด ตัวเลขอาจเทียบกันไม่ตรง 100%
+- gate ไม่ผ่าน → exit code ≠ 0 เพื่อให้ Prefect flow (P7) และ CI job model-gate (P8) หยุดได้ทันที
+
 ### ผลลัพธ์ / หลักฐาน
+ผลรันจริงเต็มวงจร → [`docs/evidence/p4_registry_demo.txt`](docs/evidence/p4_registry_demo.txt) (ทดสอบด้วย **ข้อมูลจำลอง** รูปแบบเดียวกับ Kaggle เพราะเครื่องผู้ทำยังไม่มีไฟล์จริง)
+
+| ขั้น | ผล |
+|---|---|
+| gate รอบแรก (`lightgbm_default`) | WAPE 0.145 vs naive 0.184 (ดีขึ้น 21%) · 0.27 MB → ✅ ผ่าน → **v1 champion** |
+| v2 แย่กว่า (`linear_regression`) | WAPE 0.158 ผ่าน gate แต่แพ้ v1 → ค้างเป็น **challenger** (ไม่ถูก promote) |
+| promote v2 → `/reload` | API เปลี่ยนเป็น `model_version: "2"` |
+| `rollback` → `/reload` | champion กลับเป็น v1, v2 = `archived`, API ตอบ `model_version: "1"` |
+| pytest | `tests/test_registry_gate.py` ผ่าน 3/3 |
+
+> TODO: เมื่อได้ข้อมูลจริง รัน `python -m src.evaluate_gate` ซ้ำ + แคป screenshot หน้า Models ใน MLflow UI ใส่ `docs/evidence/`
+
 ### ปัญหาที่เจอและวิธีแก้
+- `list_artifacts` error *"mlflow-artifacts URI ... tracking URI must be http"* — เพราะ artifact แบบ proxy อ้างอิง tracking URI ตัว global → `registry.get_client()` ตั้ง `mlflow.set_tracking_uri()` ด้วย
+- pip ติดตั้ง SQLAlchemy 2.1 ซึ่ง MLflow 2.17 ใช้ backend แบบ sqlite ไม่ได้ (`ImportError FallbackAsyncAdaptedQueuePool`) → test ของ P4 เปลี่ยนไปใช้ MLflow file store แทน (ไม่แก้ `requirements.txt` เพราะเป็นไฟล์ส่วนกลาง — เสนอให้ทีม pin `sqlalchemy==2.0.36` ถ้าจะรัน MLflow server นอก docker)
+- `search_model_versions` ไม่คืน alias → `status` ดึง `get_model_version` ทีละเวอร์ชัน
+- MLflow file store คืนเลขเวอร์ชันเป็น int แต่ server คืนเป็น str → เทียบด้วย `str()` เสมอ
+
 ### การใช้ AI
+- ใช้ Claude (Claude Code) ช่วยเขียน `evaluate_gate.py`, `registry.py`, test และร่างรายงานส่วนนี้; ตรวจสอบโดยรัน pytest, รันเต็มวงจร train → gate → promote → rollback กับ MLflow server จริง และอ่านโค้ดทุกบรรทัดก่อน commit
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+pytest -q tests/test_registry_gate.py          # unit test (ไม่ต้องเปิด MLflow)
+docker compose up -d mlflow                    # หรือ mlflow server --port 5000
+python -m src.train                            # M3: log 4 runs
+python -m src.evaluate_gate                    # gate → challenger → (champion)
+python -m src.evaluate_gate --run-id <run_id>  # สาธิต v2 ที่แย่กว่า
+python -m src.registry status
+python -m src.registry promote 2
+python -m src.registry rollback                # หรือ make rollback
+curl -X POST http://localhost:8000/reload      # ให้ API โหลด champion ใหม่
+```
 
 ---
 
