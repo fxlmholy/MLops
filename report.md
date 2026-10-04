@@ -7,7 +7,7 @@
 |---|---|---|---|
 | 0 | สมาชิกและการแบ่งงาน | M1 + ทุกคน | ⬜ |
 | 1 | Problem Framing & AI Project Canvas | M1 | ✅ |
-| 2 | Data Ingestion, Split & Validation | M2 | ⬜ |
+| 2 | Data Ingestion, Split & Validation | M2 | ✅ |
 | 3 | Feature Engineering | M3 | ⬜ |
 | 4 | Model Development & Experiment Tracking | M3 | ⬜ |
 | 5 | Model Registry, Gate & Rollback | M4 | ⬜ |
@@ -84,14 +84,63 @@ pytest -q tests/test_smoke.py
 ---
 
 ## §2 Data Ingestion, Split & Validation
-**ผู้รับผิดชอบ:** M2 · **Reviewer:** M1 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M2 (@NongPP235) · **Reviewer:** M1 (@nattapongsric-collab) · **PR:** #6 · **วันที่เสร็จ:** 2026-10-04
 
 ### สิ่งที่ทำ
+- `src/ingest.py` — อ่าน csv ดิบระดับ transaction → ทำความสะอาด → รวมเป็นตาราง `date × article × qty`
+  - แปลงราคา `"0,90 €"` → `0.90` (`parse_price`)
+  - ตัดแถวที่ date/qty อ่านไม่ได้, article ว่างหรือเป็น `"."`, และ `qty <= 0` (การคืนของ/ยกเลิกบิล)
+  - เลือกสินค้าขายดี top-N (`data.top_n_items = 15`) แล้วสร้างตารางครบทุกวัน × ทุกสินค้า เติม 0 ในวันที่ไม่มีขาย
+  - cap ยอดที่เกิน Q99.9 ของสินค้านั้น (`data.outlier_quantile`)
+  - บันทึก `data/processed/daily_sales.parquet` + `data/processed/meta.json` (data version = SHA256 ของไฟล์ดิบ, รายชื่อสินค้า, สถิติ mean/std/max ของช่วง train)
+- `src/split.py` — `split_from_config()` แบ่ง train/val/test **ตามเวลา** ด้วยวันที่ใน config และ error ถ้ามีชุดไหนว่าง
+- `src/validate.py` — Pandera schema ตรวจ 6 ข้อ: ชนิดข้อมูล/ค่าว่าง, `qty >= 0`, `article ∈ known_items`, `(date, article)` ไม่ซ้ำ, ไม่มีวันหาย, สถิติอยู่ในช่วง training
+  - ไม่ผ่าน → log ERROR + เขียนต่อท้าย `logs/validation_alerts.log` + พิมพ์ตารางจุดผิด + **exit code 1**
+- `data/samples/meta.json` — meta ของไฟล์ตัวอย่าง ให้ CI ตรวจ `data/samples/` ได้โดยไม่ต้องมีข้อมูลจริง
+- `tests/test_data.py` — 10 tests (แปลงราคา, ตัดคืนของ, เติมวันหาย, top-N, cap, ไฟล์ดี/เสีย, ซ้ำ/วันหาย, สถิติผิดปกติ, exit code, split ว่าง)
+
 ### การตัดสินใจและเหตุผล
+- **ตัด `qty <= 0` ทิ้ง แทนการ clip เป็น 0** — แถวติดลบคือการคืนของ ไม่ใช่ความต้องการซื้อ ถ้าเอามารวมจะทำให้ยอดของวันนั้นต่ำกว่าความจริง
+- **เติม 0 ในวันที่ไม่มีขาย (รวมวันที่ร้านปิด)** — ให้ lag/rolling ของ P3 นับวันได้ถูก (lag_7 = 7 วันจริง ไม่ใช่ 7 แถว)
+- **cap ที่ Q99.9 แทนการลบแถว** — ยอดสูงมาก ๆ อาจเป็นออเดอร์จัดเลี้ยงจริง ลบทิ้งจะทำให้วันหาย แต่ถ้าปล่อยไว้ loss จะถูกดึงด้วยวันเดียว
+- **คำนวณเพดาน cap และสถิติอ้างอิงจากช่วง train เท่านั้น** — กันข้อมูลของ val/test รั่วเข้ามา (leakage)
+- **แบ่งตามเวลา ไม่สุ่ม** — งานนี้คือทำนายอนาคต ถ้าสุ่มโมเดลจะเห็นยอดของวันหลังวันที่ทำนาย ได้คะแนนดีเกินจริง
+- **Pandera `lazy=True` + `coerce=True`** — แปลงชนิดก่อนตรวจ (`"abc"`, `"2022-13-45"` ถูกจับ) และรวบรวม error ทุกจุดในครั้งเดียว แทนที่จะหยุดที่จุดแรก
+- **เกณฑ์สถิติ**: mean ของ batch ต้องอยู่ใน `mean_train ± 3·std_train` และ max ต้องไม่เกิน `3 × max_train` — จับค่าที่พิมพ์ผิด/ระบบส่งมาผิดหน่วยได้ โดยไม่ล้มกับวันขายดีปกติ
+
 ### ผลลัพธ์ / หลักฐาน
+- `python -m src.validate data/samples/bad_sales.csv` → **exit 1** พบ 12 จุดผิด ครอบคลุม: `qty = -5`, วันที่ `2022-13-45`, `UNKNOWN ITEM`, `qty = abc`, `qty` ว่าง, `(date, article)` ซ้ำ, มีวันหาย
+- `python -m src.validate data/samples/good_sales.csv` → **exit 0**
+- `ruff check .` ผ่าน · `pytest -q` ผ่าน 16 tests
+- ทดสอบ `ingest → validate → split` ครบวงจรกับไฟล์ดิบจำลองรูปแบบเดียวกับ Kaggle (20 สินค้า, 2021-01-02 ถึง 2022-09-30) → ได้ 15 สินค้า × 637 วัน, validate ผ่าน, split ไม่มีชุดว่าง
+- **ผลกับข้อมูลจริง (Kaggle Bakery sales.csv):**
+  - clean: ตัดแถวเสีย 5 แถว, ตัดแถวคืนของ (qty <= 0) 1,295 แถว → เหลือ 232,705 transactions
+  - cap ที่ Q99.9 (เพดานจากช่วง train) 34 แถว
+  - ได้ 9,555 แถว = 15 สินค้า × 637 วัน (2021-01-02 ถึง 2022-09-30)
+  - data version (SHA256): `af5eede55b6eb2efb6bebb0e6dd1a51568c7eb73554d2f8ad2563081025681b2`
+  - 15 สินค้า: BAGUETTE, BANETTE, BOULE 400G, CAMPAGNE, CEREAL BAGUETTE, COOKIE, COUPE, CROISSANT, ECLAIR, FORMULE SANDWICH, PAIN AU CHOCOLAT, SPECIAL BREAD, TARTELETTE, TRADITIONAL BAGUETTE, VIK BREAD
+  - สถิติช่วง train (ใช้ตรวจ anomaly): mean 27.44, std 50.61, max 538 ชิ้น/วัน
+  - `python -m src.validate` กับไฟล์ processed → PASSED
+  - split: train 2021-01-02 → 2022-06-30 (8,175 แถว) · val 2022-07-01 → 2022-08-31 (930 แถว) · test 2022-09-01 → 2022-09-30 (450 แถว)
+  - screenshot ไฟล์เสียถูกจับ: `docs/evidence/p2_bad_data_caught.png`
+
 ### ปัญหาที่เจอและวิธีแก้
+- CI ไม่มีไฟล์ข้อมูลจริง (gitignored) จึงไม่มี `meta.json` → ให้ `validate` ใช้ `data/samples/meta.json` แทนอัตโนมัติเมื่อยังไม่เคยรัน ingest
+- ไฟล์จริงมีสินค้าชื่อ `"."` → ตัดออกตอน clean
+
 ### การใช้ AI
+- ใช้ Claude Code ช่วยเขียน `ingest.py`, `validate.py`, `split_from_config()`, `tests/test_data.py` และร่าง section นี้; ตรวจสอบโดยรัน `ruff` + `pytest` และลองรันกับไฟล์ดี/เสีย (M2 ต้องอ่านและอธิบายได้ทุกบรรทัดก่อน merge)
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+# 1) วาง "Bakery sales.csv" จาก Kaggle ไว้ที่ data/raw/
+python -m src.ingest                                   # → data/processed/daily_sales.parquet + meta.json
+python -m src.validate                                 # ตรวจไฟล์ processed (ผ่าน = exit 0)
+python -m src.split                                    # ดูช่วงวันที่/จำนวนแถวของ train/val/test
+# 2) สาธิตข้อมูลเสีย
+python -m src.validate data/samples/bad_sales.csv; echo $?   # → 1
+pytest -q tests/test_data.py
+```
 
 ---
 
