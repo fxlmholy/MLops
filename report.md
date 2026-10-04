@@ -11,7 +11,7 @@
 | 3 | Feature Engineering | M3 | ⬜ |
 | 4 | Model Development & Experiment Tracking | M3 | ⬜ |
 | 5 | Model Registry, Gate & Rollback | M4 | ✅ |
-| 6 | Serving, Infrastructure & Load Test | M4 | ⬜ |
+| 6 | Serving, Infrastructure & Load Test | M4 | ✅ |
 | 7 | Monitoring, Drift & Retraining | M5 | ⬜ |
 | 8 | Pipeline DAG | M2 | ⬜ |
 | 9 | CI/CD | M5 | ⬜ |
@@ -259,21 +259,75 @@ curl -X POST http://localhost:8000/reload      # ให้ API โหลด cham
 ---
 
 ## §6 Serving, Infrastructure & Load Test
-**ผู้รับผิดชอบ:** M4 · **Reviewer:** M3 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M4 (@fxlmholy) · **Reviewer:** M3 · **PR:** # · **วันที่เสร็จ:** 2026-10-04
 
 ### สิ่งที่ทำ
+- `api/model_service.py` — โหลด `models:/bakery-demand-model@champion` จาก MLflow + ประวัติยอดขายจาก `data/processed/daily_sales.parquet`
+  - สร้าง feature ด้วย **`src.features.build_features` ตัวเดียวกับตอน train** และเรียงคอลัมน์ตาม `feature_list.json` ที่ train.py log ไว้ → กัน Training–Serving Skew
+  - ส่งประวัติ **ทุกสินค้าพร้อมกัน** เข้า build_features (item_encoded ได้ค่าเดียวกับตอน train) และเติมแถว "พรุ่งนี้" (qty = NaN) ให้ lag/rolling คำนวณจากอดีต
+  - คำนวณค่าทำนายของทุก (วันที่, สินค้า) ไว้ล่วงหน้าตอนโหลดโมเดล → request จริงเป็นแค่ lookup
+  - **p50 / p_q ของ q ใดก็ได้** = ŷ + quantile_q(residual) โดย residual = ยอดจริง − ŷ บนช่วง validation **แยกรายสินค้า**
+  - `python -m api.model_service` = **batch** พยากรณ์พรุ่งนี้ทุกสินค้า → `data/processed/predictions/<date>.csv` (ให้ Prefect flow P7 เรียกตอนกลางคืน)
+- `api/main.py` (FastAPI)
+  - `POST /predict {article, date}` → `{p50, p_q, q, model_version}`
+  - `POST /recommend {article, date, on_hand, unit_price, unit_cost}` → `{forecast (=F_q), p50, q, recommended_qty, model_version}` (newsvendor: `q = (price−cost)/price`, `qty = max(0, ceil(F_q) − on_hand)` จาก `src/recommend.py`)
+  - `GET /health` (สถานะ + model version + ช่วงวันที่ทำนายได้) · `GET /metrics` (Prometheus) · `GET /articles` · `POST /reload` (โหลด champion ใหม่หลัง promote/rollback)
+  - **422** กับ: date ผิดรูปแบบ, field หาย, ชนิดผิด, ค่าติดลบ, ต้นทุน > ราคา, field แปลกปลอม, JSON เสีย, **article ไม่รู้จัก**, **date ไกลเกิน/เก่าเกินช่วงที่มีข้อมูล** · **503** เมื่อยังไม่มีโมเดล (ไม่ใช่ 500)
+  - **JSON log 1 บรรทัดต่อ request**: `request_id` (รับจาก header `X-Request-ID` ได้), `latency_ms`, `model_version`, `input`, `output`
+  - Prometheus: `requests_total{endpoint,status}`, `request_latency_seconds` (histogram), `model_loaded`, `model_version`
+- `docker-compose.yml` — mlflow (มี healthcheck) → api รอ mlflow พร้อมก่อน, mount `./data/processed` เข้า api แบบ read-only, `restart: unless-stopped` · `.dockerignore` กันไม่ให้ส่งข้อมูล/mlflow_data เข้า image
+- `loadtest/locustfile.py` — สุ่มสินค้าจาก `/articles` และวันที่จาก `/health`, predict : recommend = 3 : 1
+- `tests/test_api_validation.py` — 25 tests: ตอบถูก, newsvendor, 422 ทุกกรณีข้างบน, 503, /metrics, และ setup ใช้ build_features จริง
+
 ### การตัดสินใจและเหตุผล
+- **Serving pattern = Batch + Real-time**: ร้านต้องรู้ยอดก่อนเริ่มอบตอนเช้า → batch กลางคืนพยากรณ์ทุกสินค้า (ไม่มี latency กดดัน, เสร็จก่อน 06:00 ตาม SLO) ส่วน API real-time ใช้ถามรายสินค้า/ปรับจำนวนตามของที่เหลือ (`on_hand`) และราคา–ต้นทุนของวันนั้น ซึ่งรู้แค่ตอนถาม
+- **คำนวณ ŷ ล่วงหน้าตอนโหลดโมเดล** (เทียบกับรัน build_features + predict ทุก request): รอบแรกทำทุก request ได้ p95 = 240 ms (ตก SLO) → หลังเปลี่ยนเหลือ 13 ms เพราะ feature ของวันหนึ่งไม่ขึ้นกับ request อยู่แล้ว
+- **p_q จาก residual แทนการเทรนโมเดล quantile ทุกค่า q**: newsvendor ต้องใช้ q ที่เปลี่ยนตามราคา/ต้นทุน (เช่น 0.67) แต่ train.py เทรน quantile เดียว (0.6) → ใช้ empirical residual quantile บน validation (ข้อมูลที่โมเดลไม่เคยเห็น) ปรับได้ทุก q จากโมเดลเดียว · แยกรายสินค้าเพราะสินค้าขายเยอะคลาดเคลื่อนเป็นชิ้นมากกว่า (รวมกันทำให้ช่วงแคบเกินจริงสำหรับ baguette)
+- **422 สำหรับ article ไม่รู้จัก/date นอกช่วง** (แทน 404/500) เพื่อให้ client แยกได้ชัดว่า "input ผิด" รูปแบบ error เดียวกับ Pydantic
+- **API เปิดได้แม้ไม่มีโมเดล** (`/health` = degraded, predict = 503) เพื่อไม่ให้ container restart วนตอน MLflow ยังไม่พร้อม; ใช้ `/reload` แทนการ restart container หลัง rollback
+- uvicorn 1 worker: `/reload` เปลี่ยนโมเดลใน process เดียวได้ทันที (หลาย worker ต้อง reload ทุกตัว) และ throughput ที่วัดได้เกินพอสำหรับร้านเดียว
+
 ### ผลลัพธ์ / หลักฐาน
-| Metric | SLO | วัดได้ | ผ่าน? |
-|---|---|---|---|
-| p50 latency | – | | |
-| p95 latency | < 200 ms | | |
-| Throughput (RPS) | – | | |
-| Error rate | < 1% | | |
+Locust 50 users, spawn 10/s, 60 วินาที, uvicorn 1 worker — **API ใน docker container** ([`p5_docker_loadtest_stats.csv`](docs/evidence/p5_docker_loadtest_stats.csv)) เทียบกับรันนอก docker ([`p5_loadtest_stats.csv`](docs/evidence/p5_loadtest_stats.csv))
+
+| Metric | SLO | Docker (วัดได้) | นอก docker | ผ่าน? |
+|---|---|---|---|---|
+| p50 latency (/predict, /recommend) | – | 8 ms | 6 ms | ✅ |
+| p95 latency | < 200 ms | 20 ms | 13 ms | ✅ |
+| p99 latency | – | 39–48 ms | 18–19 ms | ✅ |
+| Throughput (RPS) | – | 155 req/s (9,232 requests) | 158 req/s | ✅ |
+| Error rate | < 1% | 0% | 0% | ✅ |
+
+- **Docker compose ใช้งานได้จริง** → [`docs/evidence/p5_docker_demo.txt`](docs/evidence/p5_docker_demo.txt): `docker compose up -d --build` → mlflow healthy → api เปิดแบบ degraded (ยังไม่มี champion) → train + gate จากเครื่อง host เข้า mlflow ใน container → `POST /reload` → API โหลด v1 ผ่าน artifact proxy ของ mlflow และอ่านข้อมูลจาก volume ที่ mount → ตอบ `/recommend` ผ่าน IP ของเครื่อง (ไม่ใช่ localhost), JSON log ออกที่ `docker logs`, Prometheus scrape `api:8000` ได้ (`up = 1`)
+
+- ตัวอย่าง request/response, 422, JSON log, /metrics และ batch output → [`docs/evidence/p5_api_demo.txt`](docs/evidence/p5_api_demo.txt)
+- `pytest tests/test_api_validation.py` ผ่าน 25/25 (รวมกับ build_features ของ M3)
+
+> ⚠️ ตัวเลขข้างบนวัดด้วย **ข้อมูลจำลอง** (รูปแบบเดียวกับ Kaggle) เพราะเครื่องผู้ทำยังไม่มีไฟล์จริง — latency ไม่ขึ้นกับค่าข้อมูล (request เป็น lookup) แต่ควรรันซ้ำด้วยข้อมูลจริง + แคป screenshot `/docs` และ Locust ก่อนนำเสนอ · การ curl จาก "เครื่องอื่นจริง" ให้สมาชิกอีกคนทดสอบผ่าน `http://<IP เครื่องที่รัน>:8000`
 
 ### ปัญหาที่เจอและวิธีแก้
+- p95 รอบแรก 240 ms > SLO → สาเหตุคือ predict ทีละแถวผ่าน MLflow pyfunc + lookup ใน MultiIndex ทุก request ทำให้ CPU เต็มที่ ~110 RPS → คำนวณล่วงหน้าตอนโหลด (p95 13 ms, RPS 158)
+- Locust บน Windows: `--host http://localhost` ทำให้ request แรกของแต่ละ user ช้า ~2 วินาที (ลอง IPv6 ก่อน) → ใช้ `http://127.0.0.1:8000`
+- MLflow server บน Windows เขียน artifact ไม่ได้เมื่อ path ยาวเกิน 260 ตัวอักษร → ใช้ artifact path สั้น (ใน docker ไม่เจอปัญหานี้)
+- API container เปิดก่อน MLflow พร้อม → ใส่ healthcheck ให้ mlflow + `depends_on: service_healthy`; ถ้ายังไม่มี champion API ไม่ crash แต่ `/health` = degraded แล้วใช้ `POST /reload` หลัง gate
+- build image ครั้งแรกนาน (~10 นาที) เพราะติดตั้ง requirements ทั้งหมดรวม prefect/evidently/locust — รอบต่อไปใช้ cache; ถ้าต้องการ image เล็กลงควรแยก requirements เฉพาะ API (ไม่ได้ทำเพื่อไม่แก้ไฟล์ส่วนกลาง)
+- ข้อสังเกตให้ M3: `item_encoded` คิดจาก `factorize` ของสินค้าที่อยู่ในข้อมูล → ถ้าตอน train กับตอน serve มีชุดสินค้าไม่เท่ากัน รหัสจะเลื่อน (API แก้ฝั่งตัวเองโดยใช้ข้อมูลชุดเดียวกับที่ train เขียนไว้ทั้งหมด) แนะนำให้ log รายชื่อสินค้าเป็น artifact ของ run
+
 ### การใช้ AI
+- ใช้ Claude (Claude Code) ช่วยเขียน `api/model_service.py`, `api/main.py`, `api/schemas.py`, test, locustfile, docker-compose และร่างรายงานส่วนนี้; ตรวจสอบโดยรัน pytest, ยิง API จริงทุก endpoint, ทดสอบ promote/rollback + reload, รัน Locust และอ่านโค้ดทุกบรรทัดก่อน commit
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+pytest -q tests/test_api_validation.py
+docker compose up -d --build            # หรือ make serve  (ต้องมี data/processed + champion ใน MLflow)
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" \
+  -d '{"article":"TRADITIONAL BAGUETTE","date":"2022-09-15"}'
+curl -X POST http://localhost:8000/recommend -H "Content-Type: application/json" \
+  -d '{"article":"TRADITIONAL BAGUETTE","date":"2022-09-15","on_hand":10,"unit_price":1.2,"unit_cost":0.4}'
+python -m api.model_service             # batch พยากรณ์พรุ่งนี้ทุกสินค้า
+locust -f loadtest/locustfile.py --headless -u 50 -r 10 -t 60s --host http://127.0.0.1:8000 --csv docs/evidence/loadtest
+```
 
 ---
 
