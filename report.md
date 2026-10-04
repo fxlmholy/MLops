@@ -222,17 +222,17 @@ conda run -n mlops-m3 python -m pytest tests/test_features.py -v
 - gate ไม่ผ่าน → exit code ≠ 0 เพื่อให้ Prefect flow (P7) และ CI job model-gate (P8) หยุดได้ทันที
 
 ### ผลลัพธ์ / หลักฐาน
-ผลรันจริงเต็มวงจร → [`docs/evidence/p4_registry_demo.txt`](docs/evidence/p4_registry_demo.txt) (ทดสอบด้วย **ข้อมูลจำลอง** รูปแบบเดียวกับ Kaggle เพราะเครื่องผู้ทำยังไม่มีไฟล์จริง)
+ผลรันจริงเต็มวงจรด้วย**ข้อมูล Kaggle จริง** (MLflow ใน docker) → [`docs/evidence/p4_registry_demo.txt`](docs/evidence/p4_registry_demo.txt)
 
 | ขั้น | ผล |
 |---|---|
-| gate รอบแรก (`lightgbm_default`) | WAPE 0.145 vs naive 0.184 (ดีขึ้น 21%) · 0.27 MB → ✅ ผ่าน → **v1 champion** |
-| v2 แย่กว่า (`linear_regression`) | WAPE 0.158 ผ่าน gate แต่แพ้ v1 → ค้างเป็น **challenger** (ไม่ถูก promote) |
+| gate รอบแรก (`lightgbm_default`) | WAPE (validation) 0.192 vs seasonal-naive 0.288 (ดีขึ้น 33% ≥ 10%) · 0.26 MB → ✅ ผ่าน → **v1 champion** |
+| โมเดลที่แย่กว่า (`linear_regression`) | WAPE 0.223 ผ่าน gate (ดีกว่า naive 23%) แต่แพ้ v1 → ค้างเป็น **challenger** ไม่ถูก promote |
 | promote v2 → `/reload` | API เปลี่ยนเป็น `model_version: "2"` |
 | `rollback` → `/reload` | champion กลับเป็น v1, v2 = `archived`, API ตอบ `model_version: "1"` |
 | pytest | `tests/test_registry_gate.py` ผ่าน 3/3 |
 
-> TODO: เมื่อได้ข้อมูลจริง รัน `python -m src.evaluate_gate` ซ้ำ + แคป screenshot หน้า Models ใน MLflow UI ใส่ `docs/evidence/`
+> TODO: แคป screenshot หน้า Models ใน MLflow UI (http://localhost:5000 → Models → bakery-demand-model) ใส่ `docs/evidence/`
 
 ### ปัญหาที่เจอและวิธีแก้
 - `list_artifacts` error *"mlflow-artifacts URI ... tracking URI must be http"* — เพราะ artifact แบบ proxy อ้างอิง tracking URI ตัว global → `registry.get_client()` ตั้ง `mlflow.set_tracking_uri()` ด้วย
@@ -281,32 +281,32 @@ curl -X POST http://localhost:8000/reload      # ให้ API โหลด cham
 
 ### การตัดสินใจและเหตุผล
 - **Serving pattern = Batch + Real-time**: ร้านต้องรู้ยอดก่อนเริ่มอบตอนเช้า → batch กลางคืนพยากรณ์ทุกสินค้า (ไม่มี latency กดดัน, เสร็จก่อน 06:00 ตาม SLO) ส่วน API real-time ใช้ถามรายสินค้า/ปรับจำนวนตามของที่เหลือ (`on_hand`) และราคา–ต้นทุนของวันนั้น ซึ่งรู้แค่ตอนถาม
-- **คำนวณ ŷ ล่วงหน้าตอนโหลดโมเดล** (เทียบกับรัน build_features + predict ทุก request): รอบแรกทำทุก request ได้ p95 = 240 ms (ตก SLO) → หลังเปลี่ยนเหลือ 13 ms เพราะ feature ของวันหนึ่งไม่ขึ้นกับ request อยู่แล้ว
+- **คำนวณ ŷ ล่วงหน้าตอนโหลดโมเดล** (เทียบกับรัน build_features + predict ทุก request): รอบแรกทำทุก request ได้ p95 = 240 ms (ตก SLO) → หลังเปลี่ยนเหลือ ~19 ms เพราะ feature ของวันหนึ่งไม่ขึ้นกับ request อยู่แล้ว
 - **p_q จาก residual แทนการเทรนโมเดล quantile ทุกค่า q**: newsvendor ต้องใช้ q ที่เปลี่ยนตามราคา/ต้นทุน (เช่น 0.67) แต่ train.py เทรน quantile เดียว (0.6) → ใช้ empirical residual quantile บน validation (ข้อมูลที่โมเดลไม่เคยเห็น) ปรับได้ทุก q จากโมเดลเดียว · แยกรายสินค้าเพราะสินค้าขายเยอะคลาดเคลื่อนเป็นชิ้นมากกว่า (รวมกันทำให้ช่วงแคบเกินจริงสำหรับ baguette)
 - **422 สำหรับ article ไม่รู้จัก/date นอกช่วง** (แทน 404/500) เพื่อให้ client แยกได้ชัดว่า "input ผิด" รูปแบบ error เดียวกับ Pydantic
 - **API เปิดได้แม้ไม่มีโมเดล** (`/health` = degraded, predict = 503) เพื่อไม่ให้ container restart วนตอน MLflow ยังไม่พร้อม; ใช้ `/reload` แทนการ restart container หลัง rollback
 - uvicorn 1 worker: `/reload` เปลี่ยนโมเดลใน process เดียวได้ทันที (หลาย worker ต้อง reload ทุกตัว) และ throughput ที่วัดได้เกินพอสำหรับร้านเดียว
 
 ### ผลลัพธ์ / หลักฐาน
-Locust 50 users, spawn 10/s, 60 วินาที, uvicorn 1 worker — **API ใน docker container** ([`p5_docker_loadtest_stats.csv`](docs/evidence/p5_docker_loadtest_stats.csv)) เทียบกับรันนอก docker ([`p5_loadtest_stats.csv`](docs/evidence/p5_loadtest_stats.csv))
+Locust 50 users, spawn 10/s, 60 วินาที — **API ใน docker container, ข้อมูล Kaggle จริง, uvicorn 1 worker** → [`p5_docker_loadtest_stats.csv`](docs/evidence/p5_docker_loadtest_stats.csv), [`p5_docker_loadtest_summary.txt`](docs/evidence/p5_docker_loadtest_summary.txt)
 
-| Metric | SLO | Docker (วัดได้) | นอก docker | ผ่าน? |
-|---|---|---|---|---|
-| p50 latency (/predict, /recommend) | – | 8 ms | 6 ms | ✅ |
-| p95 latency | < 200 ms | 20 ms | 13 ms | ✅ |
-| p99 latency | – | 39–48 ms | 18–19 ms | ✅ |
-| Throughput (RPS) | – | 155 req/s (9,232 requests) | 158 req/s | ✅ |
-| Error rate | < 1% | 0% | 0% | ✅ |
+| Metric | SLO | วัดได้ | ผ่าน? |
+|---|---|---|---|
+| p50 latency (/predict, /recommend) | – | 8 ms | ✅ |
+| p95 latency | < 200 ms | 18–19 ms | ✅ |
+| p99 latency | – | 36–37 ms | ✅ |
+| Throughput (RPS) | – | 155 req/s (9,219 requests) | ✅ |
+| Error rate | < 1% | 0% (0 failures) | ✅ |
 
-- **Docker compose ใช้งานได้จริง** → [`docs/evidence/p5_docker_demo.txt`](docs/evidence/p5_docker_demo.txt): `docker compose up -d --build` → mlflow healthy → api เปิดแบบ degraded (ยังไม่มี champion) → train + gate จากเครื่อง host เข้า mlflow ใน container → `POST /reload` → API โหลด v1 ผ่าน artifact proxy ของ mlflow และอ่านข้อมูลจาก volume ที่ mount → ตอบ `/recommend` ผ่าน IP ของเครื่อง (ไม่ใช่ localhost), JSON log ออกที่ `docker logs`, Prometheus scrape `api:8000` ได้ (`up = 1`)
-
-- ตัวอย่าง request/response, 422, JSON log, /metrics และ batch output → [`docs/evidence/p5_api_demo.txt`](docs/evidence/p5_api_demo.txt)
+- **Docker compose ใช้งานได้จริง** → [`docs/evidence/p5_api_demo.txt`](docs/evidence/p5_api_demo.txt): `docker compose up -d --build` → mlflow healthy → api เปิดแบบ degraded (ยังไม่มี champion) → ingest + train + gate จากเครื่อง host เข้า mlflow ใน container → `POST /reload` → API โหลด v1 ผ่าน artifact proxy ของ mlflow และอ่านข้อมูลจาก volume ที่ mount
+- ตัวอย่างจริง: `/predict` TRADITIONAL BAGUETTE 2022-09-15 → p50 119.6, p60 132.4 · `/recommend` CROISSANT (ราคา 1.10 ต้นทุน 0.40 → q = 0.64, มีของ 10 ชิ้น) → เตรียมเพิ่ม 14 ชิ้น
+- 422 กับ on_hand ติดลบ / สินค้าไม่รู้จัก (PIZZA) / วันที่ไกลเกิน, JSON log ใน `docker logs`, `/metrics`, และ Prometheus scrape `api:8000` ได้ (`up = 1`) → [`p5_api_demo.txt`](docs/evidence/p5_api_demo.txt)
 - `pytest tests/test_api_validation.py` ผ่าน 25/25 (รวมกับ build_features ของ M3)
 
-> ⚠️ ตัวเลขข้างบนวัดด้วย **ข้อมูลจำลอง** (รูปแบบเดียวกับ Kaggle) เพราะเครื่องผู้ทำยังไม่มีไฟล์จริง — latency ไม่ขึ้นกับค่าข้อมูล (request เป็น lookup) แต่ควรรันซ้ำด้วยข้อมูลจริง + แคป screenshot `/docs` และ Locust ก่อนนำเสนอ · การ curl จาก "เครื่องอื่นจริง" ให้สมาชิกอีกคนทดสอบผ่าน `http://<IP เครื่องที่รัน>:8000`
+> TODO: แคป screenshot หน้า `/docs` และให้สมาชิกอีกคน `curl http://<IP เครื่องที่รัน>:8000/health` จากเครื่องของตัวเอง
 
 ### ปัญหาที่เจอและวิธีแก้
-- p95 รอบแรก 240 ms > SLO → สาเหตุคือ predict ทีละแถวผ่าน MLflow pyfunc + lookup ใน MultiIndex ทุก request ทำให้ CPU เต็มที่ ~110 RPS → คำนวณล่วงหน้าตอนโหลด (p95 13 ms, RPS 158)
+- p95 รอบแรก 240 ms > SLO → สาเหตุคือ predict ทีละแถวผ่าน MLflow pyfunc + lookup ใน MultiIndex ทุก request ทำให้ CPU เต็มที่ ~110 RPS → คำนวณล่วงหน้าตอนโหลด (p95 ~19 ms, RPS 155 ใน docker)
 - Locust บน Windows: `--host http://localhost` ทำให้ request แรกของแต่ละ user ช้า ~2 วินาที (ลอง IPv6 ก่อน) → ใช้ `http://127.0.0.1:8000`
 - MLflow server บน Windows เขียน artifact ไม่ได้เมื่อ path ยาวเกิน 260 ตัวอักษร → ใช้ artifact path สั้น (ใน docker ไม่เจอปัญหานี้)
 - API container เปิดก่อน MLflow พร้อม → ใส่ healthcheck ให้ mlflow + `depends_on: service_healthy`; ถ้ายังไม่มี champion API ไม่ crash แต่ `/health` = degraded แล้วใช้ `POST /reload` หลัง gate
