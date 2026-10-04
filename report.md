@@ -11,7 +11,7 @@
 | 3 | Feature Engineering | M3 | ⬜ |
 | 4 | Model Development & Experiment Tracking | M3 | ⬜ |
 | 5 | Model Registry, Gate & Rollback | M4 | ✅ |
-| 6 | Serving, Infrastructure & Load Test | M4 | 🟨 |
+| 6 | Serving, Infrastructure & Load Test | M4 | ✅ |
 | 7 | Monitoring, Drift & Retraining | M5 | ⬜ |
 | 8 | Pipeline DAG | M2 | ⬜ |
 | 9 | CI/CD | M5 | ⬜ |
@@ -263,25 +263,29 @@ curl -X POST http://localhost:8000/reload      # ให้ API โหลด cham
 - uvicorn 1 worker: `/reload` เปลี่ยนโมเดลใน process เดียวได้ทันที (หลาย worker ต้อง reload ทุกตัว) และ throughput ที่วัดได้เกินพอสำหรับร้านเดียว
 
 ### ผลลัพธ์ / หลักฐาน
-Locust 50 users, spawn 10/s, 60 วินาที, API local (uvicorn 1 worker, Windows) — [`docs/evidence/p5_loadtest_stats.csv`](docs/evidence/p5_loadtest_stats.csv), [`p5_loadtest_summary.txt`](docs/evidence/p5_loadtest_summary.txt)
+Locust 50 users, spawn 10/s, 60 วินาที, uvicorn 1 worker — **API ใน docker container** ([`p5_docker_loadtest_stats.csv`](docs/evidence/p5_docker_loadtest_stats.csv)) เทียบกับรันนอก docker ([`p5_loadtest_stats.csv`](docs/evidence/p5_loadtest_stats.csv))
 
-| Metric | SLO | วัดได้ | ผ่าน? |
-|---|---|---|---|
-| p50 latency (/predict, /recommend) | – | 6 ms | ✅ |
-| p95 latency | < 200 ms | 13 ms | ✅ |
-| p99 latency | – | 18–19 ms | ✅ |
-| Throughput (RPS) | – | 158 req/s (9,383 requests) | ✅ |
-| Error rate | < 1% | 0% (0 failures) | ✅ |
+| Metric | SLO | Docker (วัดได้) | นอก docker | ผ่าน? |
+|---|---|---|---|---|
+| p50 latency (/predict, /recommend) | – | 8 ms | 6 ms | ✅ |
+| p95 latency | < 200 ms | 20 ms | 13 ms | ✅ |
+| p99 latency | – | 39–48 ms | 18–19 ms | ✅ |
+| Throughput (RPS) | – | 155 req/s (9,232 requests) | 158 req/s | ✅ |
+| Error rate | < 1% | 0% | 0% | ✅ |
+
+- **Docker compose ใช้งานได้จริง** → [`docs/evidence/p5_docker_demo.txt`](docs/evidence/p5_docker_demo.txt): `docker compose up -d --build` → mlflow healthy → api เปิดแบบ degraded (ยังไม่มี champion) → train + gate จากเครื่อง host เข้า mlflow ใน container → `POST /reload` → API โหลด v1 ผ่าน artifact proxy ของ mlflow และอ่านข้อมูลจาก volume ที่ mount → ตอบ `/recommend` ผ่าน IP ของเครื่อง (ไม่ใช่ localhost), JSON log ออกที่ `docker logs`, Prometheus scrape `api:8000` ได้ (`up = 1`)
 
 - ตัวอย่าง request/response, 422, JSON log, /metrics และ batch output → [`docs/evidence/p5_api_demo.txt`](docs/evidence/p5_api_demo.txt)
 - `pytest tests/test_api_validation.py` ผ่าน 25/25 (รวมกับ build_features ของ M3)
 
-> ⚠️ ตัวเลขข้างบนวัดด้วย **ข้อมูลจำลอง** (รูปแบบเดียวกับ Kaggle) บน API ที่รันนอก docker — TODO: รันซ้ำด้วยข้อมูลจริงใน `docker compose up` แล้วอัปเดตตาราง + แคป screenshot
+> ⚠️ ตัวเลขข้างบนวัดด้วย **ข้อมูลจำลอง** (รูปแบบเดียวกับ Kaggle) เพราะเครื่องผู้ทำยังไม่มีไฟล์จริง — latency ไม่ขึ้นกับค่าข้อมูล (request เป็น lookup) แต่ควรรันซ้ำด้วยข้อมูลจริง + แคป screenshot `/docs` และ Locust ก่อนนำเสนอ · การ curl จาก "เครื่องอื่นจริง" ให้สมาชิกอีกคนทดสอบผ่าน `http://<IP เครื่องที่รัน>:8000`
 
 ### ปัญหาที่เจอและวิธีแก้
 - p95 รอบแรก 240 ms > SLO → สาเหตุคือ predict ทีละแถวผ่าน MLflow pyfunc + lookup ใน MultiIndex ทุก request ทำให้ CPU เต็มที่ ~110 RPS → คำนวณล่วงหน้าตอนโหลด (p95 13 ms, RPS 158)
 - Locust บน Windows: `--host http://localhost` ทำให้ request แรกของแต่ละ user ช้า ~2 วินาที (ลอง IPv6 ก่อน) → ใช้ `http://127.0.0.1:8000`
 - MLflow server บน Windows เขียน artifact ไม่ได้เมื่อ path ยาวเกิน 260 ตัวอักษร → ใช้ artifact path สั้น (ใน docker ไม่เจอปัญหานี้)
+- API container เปิดก่อน MLflow พร้อม → ใส่ healthcheck ให้ mlflow + `depends_on: service_healthy`; ถ้ายังไม่มี champion API ไม่ crash แต่ `/health` = degraded แล้วใช้ `POST /reload` หลัง gate
+- build image ครั้งแรกนาน (~10 นาที) เพราะติดตั้ง requirements ทั้งหมดรวม prefect/evidently/locust — รอบต่อไปใช้ cache; ถ้าต้องการ image เล็กลงควรแยก requirements เฉพาะ API (ไม่ได้ทำเพื่อไม่แก้ไฟล์ส่วนกลาง)
 - ข้อสังเกตให้ M3: `item_encoded` คิดจาก `factorize` ของสินค้าที่อยู่ในข้อมูล → ถ้าตอน train กับตอน serve มีชุดสินค้าไม่เท่ากัน รหัสจะเลื่อน (API แก้ฝั่งตัวเองโดยใช้ข้อมูลชุดเดียวกับที่ train เขียนไว้ทั้งหมด) แนะนำให้ log รายชื่อสินค้าเป็น artifact ของ run
 
 ### การใช้ AI
