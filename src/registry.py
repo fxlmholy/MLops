@@ -18,6 +18,7 @@ import json
 import os
 import sys
 
+import mlflow
 from mlflow import MlflowClient
 from mlflow.exceptions import MlflowException
 
@@ -35,7 +36,10 @@ def tracking_uri(cfg: dict | None = None) -> str:
 
 
 def get_client(cfg: dict | None = None) -> MlflowClient:
-    return MlflowClient(tracking_uri=tracking_uri(cfg))
+    uri = tracking_uri(cfg)
+    # ตั้งค่า global ด้วย: artifact แบบ mlflow-artifacts:/ อ้างอิง tracking URI ตัวนี้ตอนดาวน์โหลด/list
+    mlflow.set_tracking_uri(uri)
+    return MlflowClient(tracking_uri=uri)
 
 
 def model_name(cfg: dict | None = None) -> str:
