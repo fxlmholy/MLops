@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
-from api.model_service import QUANTILE_GRID, ModelService
+from api.model_service import ALL, QUANTILE_GRID, ModelService
 from src.config import load_config
 
 ARTICLES = ["BAGUETTE", "CROISSANT"]
@@ -28,7 +28,8 @@ def fake_service() -> ModelService:
     feats = pd.DataFrame({"lag_7": 10.0}, index=idx)
     return ModelService(
         model=Lag7Model(), model_version="3", run_id="abc", feature_columns=FEATURES, features=feats,
-        residual_q={float(q): float((q - 0.5) * 10) for q in QUANTILE_GRID},  # p50 = ŷ, p90 = ŷ + 4
+        yhat=dict(zip(feats.index, Lag7Model().predict(feats), strict=True)),
+        residual_q={ALL: {float(q): float((q - 0.5) * 10) for q in QUANTILE_GRID}},  # p50 = ŷ, p90 = ŷ+4
         articles=ARTICLES, min_date=dates[0], max_date=dates[-1],
     )
 
@@ -136,4 +137,5 @@ def test_setup_uses_build_features():
     assert svc.max_date == pd.Timestamp("2022-10-01")       # พรุ่งนี้ของข้อมูลล่าสุด
     tomorrow = svc.features.loc[(pd.Timestamp("2022-10-01"), "BAGUETTE"), "lag_7"]
     assert tomorrow == hist[(hist.date == "2022-09-24") & (hist.article == "BAGUETTE")]["qty"].iloc[0]
-    assert svc.residual_at(0.9) >= svc.residual_at(0.5)
+    assert svc.residual_at(0.9, "BAGUETTE") >= svc.residual_at(0.5, "BAGUETTE")
+    assert "BAGUETTE" in svc.residual_q  # มี residual แยกรายสินค้า

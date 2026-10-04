@@ -31,6 +31,8 @@ log = logging.getLogger("model_service")
 
 QUANTILE_GRID = np.round(np.arange(0.05, 0.951, 0.05), 2)
 MAX_LAG = 14  # ต้องมีประวัติอย่างน้อยเท่า lag ที่ยาวที่สุด
+MIN_RESID_ROWS = 20  # จำนวนวันขั้นต่ำต่อสินค้าที่จะคำนวณ residual แยก
+ALL = "__all__"
 
 
 @dataclass
@@ -42,7 +44,8 @@ class ModelService:
     run_id: str | None = None
     feature_columns: list[str] = field(default_factory=list)
     features: pd.DataFrame | None = None       # index = (date, article)
-    residual_q: dict[float, float] = field(default_factory=dict)
+    yhat: dict = field(default_factory=dict)    # (date, article) → ค่าทำนายของโมเดล (คำนวณล่วงหน้า)
+    residual_q: dict[str, dict[float, float]] = field(default_factory=dict)  # article/ALL → {q: resid}
     articles: list[str] = field(default_factory=list)
     min_date: pd.Timestamp | None = None
     max_date: pd.Timestamp | None = None        # วันที่ล่าสุดที่ทำนายได้ (= วันถัดจากข้อมูลจริงวันสุดท้าย)
@@ -100,25 +103,36 @@ class ModelService:
         self.min_date = history["date"].min() + pd.Timedelta(days=MAX_LAG)
         self.max_date = last + pd.Timedelta(days=1)
 
+        # ทำนายทุก (date, article) ที่ feature ครบในครั้งเดียว → request จริงเป็นแค่ lookup (เร็ว, p95 ต่ำ)
+        ready = self.features[self.features.index.get_level_values("date") >= self.min_date]
+        ready = ready.dropna(subset=self.feature_columns)
+        self.yhat = dict(zip(ready.index, self._raw_predict(ready), strict=True))
+
         # residual บน validation: (train_end, val_end] — ช่วงที่โมเดลไม่ได้ใช้เทรน
         val = feats[(feats["date"] > cfg["split"]["train_end"]) & (feats["date"] <= cfg["split"]["val_end"])]
-        val = val.dropna(subset=self.feature_columns + ["qty"])
-        if len(val) >= 30:
-            resid = val["qty"].to_numpy(float) - self._raw_predict(val)
-        else:  # ข้อมูลไม่พอ → ไม่ปรับ (p_q = ŷ)
-            log.warning("validation rows %d < 30 → residual quantiles = 0", len(val))
-            resid = np.zeros(1)
-        self.residual_q = {float(q): float(np.quantile(resid, q)) for q in QUANTILE_GRID}
+        val = val.dropna(subset=self.feature_columns + ["qty"]).copy()
+        val["resid"] = val["qty"].to_numpy(float) - self._raw_predict(val) if len(val) else []
+
+        def grid(resid) -> dict[float, float]:
+            resid = np.asarray(resid, float) if len(resid) else np.zeros(1)  # ไม่มีข้อมูล → p_q = ŷ
+            return {float(q): float(np.quantile(resid, q)) for q in QUANTILE_GRID}
+
+        # แยกรายสินค้า เพราะสินค้าขายเยอะคลาดเคลื่อน (เป็นชิ้น) มากกว่าสินค้าขายน้อย; ข้อมูลน้อยใช้ค่ารวม
+        self.residual_q = {ALL: grid(val["resid"])}
+        for article, g in val.groupby("article"):
+            if len(g) >= MIN_RESID_ROWS:
+                self.residual_q[article] = grid(g["resid"])
 
     # ---------- ทำนาย ----------
     def _raw_predict(self, rows: pd.DataFrame) -> np.ndarray:
         pred = self.model.predict(rows[self.feature_columns])
         return np.asarray(pred, dtype=float).ravel()
 
-    def residual_at(self, q: float) -> float:
-        """interpolate residual quantile ที่ q (clip ไว้ในช่วง 0.05–0.95)"""
-        qs = np.array(sorted(self.residual_q))
-        return float(np.interp(np.clip(q, qs[0], qs[-1]), qs, [self.residual_q[k] for k in qs]))
+    def residual_at(self, q: float, article: str | None = None) -> float:
+        """interpolate residual quantile ที่ q ของสินค้านั้น (clip ไว้ในช่วง 0.05–0.95)"""
+        table = self.residual_q.get(article) or self.residual_q[ALL]
+        qs = np.array(sorted(table))
+        return float(np.interp(np.clip(q, qs[0], qs[-1]), qs, [table[k] for k in qs]))
 
     def check_input(self, article: str, date) -> str | None:
         """คืนข้อความ error ถ้า article/date ใช้ไม่ได้ (API แปลงเป็น 422)"""
@@ -128,14 +142,15 @@ class ModelService:
         if d < self.min_date or d > self.max_date:
             return (f"date {d.date()} อยู่นอกช่วงที่ทำนายได้ {self.min_date.date()}..{self.max_date.date()} "
                     "(ทำนายได้ไกลสุด 1 วันหลังข้อมูลล่าสุด)")
+        if (d, article) not in self.yhat:
+            return f"date {d.date()}: ประวัติยอดขายของ '{article}' ไม่พอสร้าง feature"
         return None
 
     def predict(self, article: str, date, q: float) -> dict:
         """คืน p50 และ p_q (ยอดขายติดลบไม่ได้ → clip ที่ 0)"""
-        row = self.features.loc[[(pd.Timestamp(date), article)]]
-        yhat = float(self._raw_predict(row)[0])
-        p50 = max(0.0, yhat + self.residual_at(0.5))
-        p_q = max(0.0, yhat + self.residual_at(q))
+        yhat = float(self.yhat[(pd.Timestamp(date), article)])
+        p50 = max(0.0, yhat + self.residual_at(0.5, article))
+        p_q = max(0.0, yhat + self.residual_at(q, article))
         return {"p50": round(p50, 2), "p_q": round(p_q, 2)}
 
     def batch_predict(self, date=None, q: float = 0.5) -> pd.DataFrame:
