@@ -1,0 +1,13 @@
+# P5 (M4): ไม่ส่งไฟล์ใหญ่/ไม่จำเป็นเข้า docker build context
+.git
+mlflow_data
+mlruns
+mlartifacts
+data
+docs
+tests
+loadtest
+**/__pycache__
+.pytest_cache
+.ruff_cache
+.venv
