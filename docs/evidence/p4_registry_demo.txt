@@ -1,0 +1,29 @@
+# P4 demo — ผลรันจริง (ข้อมูลจำลองรูปแบบเดียวกับ Kaggle, MLflow server local, 2026-10-04)
+# ขั้นตอน: python -m src.train  →  python -m src.evaluate_gate  →  ...
+
+$ python -m src.evaluate_gate
+[gate] candidate=lightgbm_default  WAPE=0.1452  naive WAPE=0.1842  size=0.27 MB
+[gate] ✅ ผ่าน gating metric ทุกข้อ
+[registry] bakery-demand-model v1 ← run lightgbm_default (08e30b3c) = challenger
+[registry] champion: v- → v1
+[gate] 🏆 v1 เป็น champion ใหม่
+
+# v2 ที่แย่กว่า (linear regression) → ผ่าน gate แต่ไม่ชนะ champion → ค้างเป็น challenger
+$ python -m src.evaluate_gate --run-id dc188e4bbca0444fa0fb68447dfd8ca8
+[gate] candidate=linear_regression  WAPE=0.1580  naive WAPE=0.1842  size=0.00 MB
+[gate] ✅ ผ่าน gating metric ทุกข้อ
+[registry] bakery-demand-model v2 ← run linear_regression (dc188e4b) = challenger
+[gate] v2 ไม่ชนะ champion v1 (WAPE 0.1452) → ค้างเป็น challenger, champion เดิมให้บริการต่อ
+
+# บังคับ promote v2 → API reload → rollback กลับ v1 → API reload
+$ python -m src.registry promote 2
+[registry] champion: v1 → v2
+$ curl -X POST localhost:8000/reload
+{"status":"reloaded","from_version":"1","to_version":"2"}
+$ python -m src.registry rollback
+[registry] rollback champion: v2 → v1  (เรียก POST /reload ที่ API เพื่อโหลดใหม่)
+$ curl -X POST localhost:8000/reload
+{"status":"reloaded","from_version":"2","to_version":"1"}
+$ python -m src.registry status
+v1   champion    run=lightgbm_default
+v2   archived    run=linear_regression
