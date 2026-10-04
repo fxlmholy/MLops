@@ -21,11 +21,11 @@
 
 | รหัส | ชื่อ | GitHub | บทบาทหลัก |
 |---|---|---|---|
-| M1 | `<ชื่อ>` | `@<user>` | Project Lead / Problem Framing / Report & Architecture |
-| M2 | `<ชื่อ>` | `@<user>` | Data Engineer — Ingest, Split, Validation, Pipeline DAG |
+| M1 | `<ชื่อ>` | `@nattapongsric-collab` | Project Lead / Problem Framing / Report & Architecture |
+| M2 | `<ชื่อ>` | `@NongPP235` | Data Engineer — Ingest, Split, Validation, Pipeline DAG |
 | M3 | `<ชื่อ>` | `@<user>` | ML Engineer — Features, Training, Experiment Tracking |
 | M4 | `<ชื่อ>` | `@<user>` | Serving Engineer — Registry Gate, API, Docker, Load Test |
-| M5 | `<ชื่อ>` | `@<user>` | Ops Engineer — Monitoring, Drift, Retrain, CI/CD |
+| M5 | `<ชื่อ>` | `@thanachotkam-hue` | Ops Engineer — Monitoring, Drift, Retrain, CI/CD |
 
 > ⚠️ อาจารย์ให้คะแนนรายบุคคลจาก **ประวัติ commit** + peer review + การตอบคำถาม
 > → **ทุกคนต้อง commit และ push ด้วย account ของตัวเอง** และเปิด PR ของตัวเองอย่างน้อย 2 ครั้ง
