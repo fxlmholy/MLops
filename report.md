@@ -6,7 +6,7 @@
 | § | ขั้น | ผู้รับผิดชอบ | สถานะ |
 |---|---|---|---|
 | 0 | สมาชิกและการแบ่งงาน | M1 + ทุกคน | ⬜ |
-| 1 | Problem Framing & AI Project Canvas | M1 | ⬜ |
+| 1 | Problem Framing & AI Project Canvas | M1 | ✅ |
 | 2 | Data Ingestion, Split & Validation | M2 | ⬜ |
 | 3 | Feature Engineering | M3 | ⬜ |
 | 4 | Model Development & Experiment Tracking | M3 | ⬜ |
@@ -25,23 +25,61 @@
 
 | รหัส | ชื่อ-สกุล | รหัสนักศึกษา | GitHub | บทบาท |
 |---|---|---|---|---|
-| M1 | | | | Project Lead / Framing / Report |
-| M2 | | | | Data Engineer |
+| M1 | | 67xxxxxxxx | @nattapongsric-collab | Project Lead / Framing / Report |
+| M2 | | 67xxxxxxxx | NongPP235 | Data Engineer |
 | M3 | | | | ML Engineer |
 | M4 | | | | Serving Engineer |
-| M5 | | | | Ops Engineer |
+| M5 | ธนโชติ กมลเลิศ|673380630-1 |thanachotkam-hue | Ops Engineer |
 
 ---
 
 ## §1 Problem Framing & AI Project Canvas
-**ผู้รับผิดชอบ:** M1 · **Reviewer:** M5 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M1 (@nattapongsric-collab) · **Reviewer:** M5 (@thanachotkam-hue) · **PR:** #2 · **วันที่เสร็จ:** 2026-10-04
 
 ### สิ่งที่ทำ
+- เขียน AI Project Canvas ครบทุกช่อง → [`docs/ai_project_canvas.md`](docs/ai_project_canvas.md)
+- ตอบ 5 คำถามตรวจสอบหัวข้อ (ใครเดือดร้อน / business metric / drift / latency / rollback) และเหตุผลที่ใช้ ML แทน rule (ใน canvas)
+- กำหนด metrics, gating และ SLO ใน [`configs/config.yaml`](configs/config.yaml) (หัวข้อ `metrics`, `gate`, `slo`)
+
+**โจทย์:** พยากรณ์ยอดขายรายสินค้าของวันพรุ่งนี้ (p50 และ p_q) แล้วแนะนำจำนวนที่ควรเตรียม ให้ร้านเบเกอรี่ลดทั้งของขาดและของเหลือทิ้ง
+
 ### การตัดสินใจและเหตุผล
+- **Quantile regression แทนการทำนายค่าเฉลี่ย** — ความเสียหายของการเตรียมขาดกับเตรียมเกินไม่เท่ากัน จึงทำนาย quantile q = (ราคา − ต้นทุน)/ราคา ตามหลัก newsvendor ซึ่งให้จำนวนเตรียมที่คาดว่ากำไรสูงสุด
+- **WAPE เป็น optimizing metric** (เทียบกับ MAPE/RMSE) — WAPE = Σ|y−ŷ| / Σy อ่านเป็น % ได้ง่ายสำหรับเจ้าของร้าน และไม่หารด้วยศูนย์ในวันที่บางสินค้าขายได้ 0 ชิ้น ซึ่ง MAPE ใช้ไม่ได้ ส่วน RMSE ถูกดึงด้วยสินค้าขายดีมากเกินไป
+- **Pinball loss @ q เป็น metric รอง** — วัดคุณภาพของ quantile ที่ใช้ตัดสินใจจริง
+- **Baseline = seasonal-naive (lag 7)** — คือวิธีที่ร้านใช้อยู่จริง ("เท่าวันเดียวกันสัปดาห์ก่อน") ถ้า ML ชนะไม่ถึง 10% ไม่คุ้มที่จะดูแลระบบที่ซับซ้อนกว่า
+- **Serving แบบ Batch + Real-time** — batch ทุกคืนให้ทันก่อนอบตอนเช้า (deadline 06:00) และ API สำหรับถามรายสินค้าระหว่างวัน
+
+| ประเภท | ตัวชี้วัด | เกณฑ์ | อยู่ใน config |
+|---|---|---|---|
+| Optimizing | WAPE | ต่ำสุด | `metrics.optimizing` |
+| Secondary | Pinball loss @ q, MAE | รายงาน | `metrics.secondary` |
+| Gating | WAPE ดีกว่า seasonal-naive | ≥ 10% | `gate.min_improvement_vs_naive` |
+| Gating | ขนาดโมเดล | < 50 MB | `gate.max_model_size_mb` |
+| Gating | p95 latency | < 200 ms | `gate.max_p95_latency_ms` |
+| Gating | ข้อมูลผ่าน schema | ต้องผ่าน | `gate.require_schema_pass` |
+| Business | stockout rate, waste rate, lost profit/วัน | simulate บน test set (P3) | `metrics.business` |
+| SLO | availability / p95 / error rate | ≥ 99% / < 200 ms / < 1% | `slo.*` |
+| SLO | batch เสร็จก่อน | 06:00 | `slo.batch_deadline` |
+
 ### ผลลัพธ์ / หลักฐาน
+- Canvas ครบทุกช่อง ไม่มี TODO เหลือ: `docs/ai_project_canvas.md`
+- ค่า metric/gate/SLO ทั้งหมดอยู่ใน `configs/config.yaml` ที่เดียว ให้ `evaluate_gate.py` (M4) และ monitoring (M5) อ่านใช้
+- ตัวเลขผลจริง (WAPE ของ baseline เทียบโมเดล และ business metrics) จะมาจากการทดลองใน §3–§4 (M3)
+
 ### ปัญหาที่เจอและวิธีแก้
+- ขนมปังสดขายข้ามวันไม่ได้ ถ้าใช้ค่าเฉลี่ยจะเตรียมขาดประมาณครึ่งหนึ่งของวัน → แก้ด้วยการทำนาย quantile และคำนวณจำนวนเตรียมแบบ newsvendor
+- เพิ่ม key ใหม่ใน `config.yaml` โดย **ไม่แก้ key เดิม** ที่โมดูลของคนอื่นใช้อยู่ (`gate.min_improvement_vs_naive`, `gate.max_model_size_mb`, `slo.*`) เพื่อไม่ให้โค้ดของสมาชิกคนอื่นพัง
+
 ### การใช้ AI
+- ใช้ Claude Code ช่วยร่างคำตอบ 5 คำถาม, เหตุผลการเลือก metric และจัดรูปแบบตาราง; ตรวจสอบโดย M1 อ่านทุกข้อให้ตรงกับโจทย์และ CLAUDE.md §5 (P1) และเทียบค่าใน config กับเกณฑ์ที่ทีมตกลง
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+# ตรวจว่า config โหลดได้และมีค่าของ P1
+python -c "from src.config import load_config as l; c=l(); print(c['metrics'], c['gate'], c['slo'])"
+pytest -q tests/test_smoke.py
+```
 
 ---
 

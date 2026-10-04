@@ -23,14 +23,23 @@ features:
 model:
   quantile_default: 0.6    # ใช้เมื่อไม่ส่งราคา/ต้นทุนมา
 
+metrics:                   # P1/M1 — ตัวชี้วัดของโมเดล
+  optimizing: wape         # เลือกโมเดลจาก WAPE ต่ำสุด
+  secondary: [pinball, mae]
+  baseline: seasonal_naive # rule ที่ต้องชนะ: ยอด = วันเดียวกันสัปดาห์ก่อน (lag 7)
+  business: [stockout_rate, waste_rate, lost_profit_per_day]  # simulate บน test set
+
 gate:                      # Gating metrics — ต้องผ่านทุกข้อจึง promote
   min_improvement_vs_naive: 0.10   # WAPE ต้องดีกว่า seasonal-naive >= 10%
   max_model_size_mb: 50
+  max_p95_latency_ms: 200          # P1/M1
+  require_schema_pass: true        # P1/M1 — ข้อมูลต้องผ่าน Pandera schema
 
 slo:
   p95_latency_ms: 200
   error_rate: 0.01
   availability: 0.99
+  batch_deadline: "06:00"   # P1/M1 — batch พยากรณ์ต้องเสร็จก่อนเริ่มอบ
 
 monitoring:
   psi_threshold: 0.2              # data drift
