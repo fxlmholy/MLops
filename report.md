@@ -232,7 +232,9 @@ conda run -n mlops-m3 python -m pytest tests/test_features.py -v
 | `rollback` → `/reload` | champion กลับเป็น v1, v2 = `archived`, API ตอบ `model_version: "1"` |
 | pytest | `tests/test_registry_gate.py` ผ่าน 3/3 |
 
-> TODO: แคป screenshot หน้า Models ใน MLflow UI (http://localhost:5000 → Models → bakery-demand-model) ใส่ `docs/evidence/`
+Screenshot MLflow Model Registry (v1 = `@champion`, v2 = `archived` + `rolled_back`, v3 = `@challenger`, tag `champion_history` ของ registered model):
+
+![MLflow registry](docs/evidence/p4_mlflow_registry.png)
 
 ### ปัญหาที่เจอและวิธีแก้
 - `list_artifacts` error *"mlflow-artifacts URI ... tracking URI must be http"* — เพราะ artifact แบบ proxy อ้างอิง tracking URI ตัว global → `registry.get_client()` ตั้ง `mlflow.set_tracking_uri()` ด้วย
@@ -303,7 +305,11 @@ Locust 50 users, spawn 10/s, 60 วินาที — **API ใน docker conta
 - 422 กับ on_hand ติดลบ / สินค้าไม่รู้จัก (PIZZA) / วันที่ไกลเกิน, JSON log ใน `docker logs`, `/metrics`, และ Prometheus scrape `api:8000` ได้ (`up = 1`) → [`p5_api_demo.txt`](docs/evidence/p5_api_demo.txt)
 - `pytest tests/test_api_validation.py` ผ่าน 25/25 (รวมกับ build_features ของ M3)
 
-> TODO: แคป screenshot หน้า `/docs` และให้สมาชิกอีกคน `curl http://<IP เครื่องที่รัน>:8000/health` จากเครื่องของตัวเอง
+Screenshot `POST /recommend` จากหน้า `/docs` (Swagger UI) — ตอบ 200 พร้อม `recommended_qty` และ header `x-request-id`:
+
+![API /docs recommend](docs/evidence/p5_api_docs.png)
+
+> TODO: ให้สมาชิกอีกคน `curl http://<IP เครื่องที่รัน>:8000/health` จากเครื่องของตัวเอง
 
 ### ปัญหาที่เจอและวิธีแก้
 - p95 รอบแรก 240 ms > SLO → สาเหตุคือ predict ทีละแถวผ่าน MLflow pyfunc + lookup ใน MultiIndex ทุก request ทำให้ CPU เต็มที่ ~110 RPS → คำนวณล่วงหน้าตอนโหลด (p95 ~19 ms, RPS 155 ใน docker)
