@@ -472,11 +472,13 @@ locust -f loadtest/locustfile.py --headless -u 50 -r 10 -t 60s --host http://127
 | P0 Setup | Claude Code | ตั้งค่า git (ชื่อ/อีเมล), แตก branch, ช่วยเปิด PR | M1 |
 | §1 Problem Framing | Claude Code | ร่างคำตอบ 5 คำถาม, เหตุผลเลือก metric, จัดตาราง metric/gate/SLO | M1 |
 | §10 Architecture & README | Claude Code | ร่างแผนภาพสถาปัตยกรรม (สคริปต์ matplotlib), ปรับ README, ร่าง §10 | M1 |
-| §2 Data | (รอ M2) | | M2 |
-| §3–§4 Features & Model | (รอ M3) | | M3 |
-| §5–§6 Registry & Serving | (รอ M4) | | M4 |
+| §2 Data | Claude Code | เขียน `ingest.py`, `validate.py`, `split_from_config()`, `tests/test_data.py` และร่าง §2 | M2 — ตรวจด้วย ruff + pytest และรันกับไฟล์ดี/เสีย |
+| §3–§4 Features & Model | AI (ไม่ระบุเครื่องมือ) | วางแนวทาง feature, ตรวจ data leakage, ออกแบบ test, โค้ด train + MLflow tracking และจัดทำรายงาน | M3 — ตรวจผลการรันและผล test ก่อนใช้ |
+| §5–§6 Registry & Serving | Claude Code | เขียน `evaluate_gate.py`, `registry.py`, `api/*`, test, locustfile, docker-compose และร่าง §5–§6 | M4 — รัน pytest, ยิง API ทุก endpoint, ทดสอบ promote/rollback และ Locust |
 | §7 Monitoring | (รอ M5) | | M5 |
 | §8 Pipeline DAG | (รอ M2) | | M2 |
 | §9 CI/CD | (รอ M5) | | M5 |
+
+**สรุป:** ทุกคนที่ส่งงานแล้วใช้ AI ช่วยเขียนโค้ดและร่างรายงาน และทุกคนตรวจสอบด้วยการรัน test / รันกับข้อมูลจริงก่อน merge — การตัดสินใจหลัก (metric, เกณฑ์ gate, การเลือกโมเดล, วิธีแก้ปัญหาเช่น p95 240 ms → 19 ms ใน §6) ผู้รับผิดชอบแต่ละส่วนเป็นผู้ตรวจและยืนยัน พร้อมเขียนเหตุผลไว้ใน section ของตัวเอง
 
 **หลักการที่ทีมใช้:** AI ช่วยร่างโค้ด/เอกสารได้ แต่เจ้าของงานต้องอ่านทุกบรรทัด รันทดสอบเอง และอธิบายได้ตอนนำเสนอ (CLAUDE.md §1 ข้อ 6)
