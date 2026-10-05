@@ -381,7 +381,7 @@ locust -f loadtest/locustfile.py --headless -u 50 -r 10 -t 60s --host http://127
 ---
 
 ## §10 Architecture, Reproducibility & สรุป
-**ผู้รับผิดชอบ:** M1 (@nattapongsric-collab) · **Reviewer:** M5 (@thanachotkam-hue) · **PR:** # · **วันที่เสร็จ:** (รอทดสอบเครื่องเปล่า)
+**ผู้รับผิดชอบ:** M1 (@nattapongsric-collab) · **Reviewer:** M5 (@thanachotkam-hue) · **PR:** # · **วันที่เสร็จ:** 2026-10-05
 
 ### แผนภาพสถาปัตยกรรม
 ![Architecture](docs/architecture.png)
@@ -415,28 +415,43 @@ locust -f loadtest/locustfile.py --headless -u 50 -r 10 -t 60s --host http://127
 | ค่าตั้งทั้งหมด | `configs/config.yaml` ไฟล์เดียว |
 
 ### ผลทดสอบรันจากเครื่องเปล่า
-> ทำหลังทุก phase merge เข้า `dev` — สมาชิก 1 คน clone ใหม่บนเครื่องที่ไม่เคยรัน แล้วทำตาม README ทีละขั้น
+**ยืนยันแล้ว (บนเครื่องของ M4 ด้วยข้อมูล Kaggle จริง — ดู [`p5_api_demo.txt`](docs/evidence/p5_api_demo.txt)):**
+`docker compose up -d --build` → mlflow healthy → `ingest` → `train` → `evaluate_gate` → `POST /reload` → API ตอบ `/predict` `/recommend` ได้ และ Prometheus scrape API ได้ (`up = 1`)
+
+**ทดสอบบนเครื่องที่ไม่เคยรัน** (clone ใหม่ ทำตาม [`README.md`](README.md) ทีละขั้น):
 
 | ขั้นตอนใน README | ผล | หมายเหตุ / สิ่งที่ต้องแก้ |
 |---|---|---|
 | clone + `pip install -r requirements.txt` | ⬜ | |
 | วาง `data/raw/Bakery sales.csv` | ⬜ | |
 | `docker compose up -d --build` | ⬜ | |
-| `make pipeline` | ⬜ | |
-| `curl /recommend` | ⬜ | |
-| `python -m src.validate data/samples/bad_sales.csv` ล้ม | ⬜ | |
+| `ingest` → `validate` → `train` → `evaluate_gate` | ⬜ | |
+| `POST /reload` + `curl /recommend` | ⬜ | |
+| `python -m src.validate data/samples/bad_sales.csv` ล้ม (exit 1) | ⬜ | |
+| `make pipeline` (P7) | ⬜ | รอ P7 |
 
 ผู้ทดสอบ: · เครื่อง/OS: · วันที่:
 
 ### สรุปผลเชิงธุรกิจ
-> ตัวเลขดึงจาก §4 (M3) เมื่อการทดลองเสร็จ
+**โมเดลที่ใช้งาน:** LightGBM (default) = `@champion` v1 — เลือกด้วย WAPE บน validation ตามเกณฑ์ใน §1
 
-| ตัวชี้วัด | Seasonal-naive (rule) | โมเดลที่เลือก | เปลี่ยนแปลง |
+| ตัวชี้วัด | Seasonal-naive (วิธีเดิมของร้าน) | LightGBM (champion) | เปลี่ยนแปลง | ที่มา |
+|---|---|---|---|---|
+| WAPE (validation, ข้อมูลจริงผ่าน pipeline ของ M2) | 28.8% | **19.2%** | **ดีขึ้น 33%** (gate ต้อง ≥ 10% ✅) | §5 |
+| Stockout proxy | 1.326 | 1.026 | **ลดลง 23%** | §4 |
+| Waste proxy | 1.183 | 0.825 | **ลดลง 30%** | §4 |
+| Lost profit / วัน | — | — | ยังไม่ได้คำนวณ | — |
+
+| SLO (§1) | เป้า | วัดได้ (docker, 50 users) | ผ่าน? |
 |---|---|---|---|
-| WAPE | | | |
-| Stockout rate | | | |
-| Waste rate | | | |
-| Lost profit / วัน | | | |
+| p95 latency | < 200 ms | 18–19 ms | ✅ |
+| Error rate | < 1% | 0% | ✅ |
+| ขนาดโมเดล | < 50 MB | 0.26 MB | ✅ |
+| Throughput | – | 155 req/s | ✅ (ร้านเดียวใช้ไม่ถึง) |
+
+**สรุป:** เมื่อเทียบกับวิธีที่ร้านใช้อยู่ ("เท่าวันเดียวกันสัปดาห์ก่อน") โมเดลคลาดเคลื่อนน้อยลงประมาณหนึ่งในสาม และเมื่อแปลงเป็นจำนวนที่ควรเตรียมแบบ newsvendor ทำให้ทั้งของขาดและของเหลือทิ้งลดลง ระบบตอบเร็วกว่า SLO ประมาณ 10 เท่า
+
+> **หมายเหตุความสอดคล้องของตัวเลข:** ตารางใน §4 (M3) ได้ WAPE naive 36.8% / LightGBM 27.1% ซึ่งต่างจาก §5 (M4) เพราะรันคนละรอบข้อมูล ตัวเลข WAPE ในตารางนี้ใช้ของ §5 ซึ่งรันผ่าน `ingest` ของ M2 กับข้อมูล Kaggle จริง ส่วน stockout/waste proxy ยังเป็นของ §4 — **M3 ควรรัน `train.py` ใหม่บนข้อมูลเดียวกันแล้วอัปเดต §4** ให้ตัวเลขตรงกันก่อน release
 
 ### ข้อจำกัดและงานในอนาคต
 - **ข้อมูลจากร้านเดียว ช่วง 2021–2022** — โมเดลอาจใช้กับร้านอื่นหรือช่วงเวลาอื่นไม่ได้ทันที ต้องเทรนใหม่ด้วยข้อมูลของร้านนั้น
@@ -444,6 +459,8 @@ locust -f loadtest/locustfile.py --headless -u 50 -r 10 -t 60s --host http://127
 - **ไม่มี feature ภายนอก** เช่น สภาพอากาศ, โปรโมชัน, อีเวนต์ในพื้นที่ — อนาคตเพิ่มได้ผ่าน `build_features()`
 - **ต้นทุนสินค้าเป็นค่าสมมุติ** — q ของ newsvendor ขึ้นกับราคา/ต้นทุน ถ้าใช้จริงต้องใช้ต้นทุนจริงของร้าน
 - **รันบนเครื่องเดียว** — ถ้าขยายหลายสาขา ควรแยก MLflow/DB ไปที่ server กลางและใช้ Prefect work pool
+- **p_q มาจาก residual บน validation** (§6) ไม่ใช่โมเดล quantile โดยตรง — ถ้าข้อมูล drift ต้อง retrain เพื่อคำนวณ residual ใหม่ด้วย
+- **`item_encoded` อิงลำดับสินค้าในข้อมูล** (ข้อสังเกตจาก M4 §6) — ถ้าเพิ่ม/ลดสินค้า ต้อง retrain ทั้งโมเดล
 
 ---
 
