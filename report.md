@@ -309,7 +309,7 @@ Screenshot `POST /recommend` จากหน้า `/docs` (Swagger UI) — ต�
 
 ![API /docs recommend](docs/evidence/p5_api_docs.png)
 
-> TODO: ให้สมาชิกอีกคน `curl http://<IP เครื่องที่รัน>:8000/health` จากเครื่องของตัวเอง
+- **เรียกจากอุปกรณ์อื่นได้จริง**: เปิด `http://172.20.10.7:8000/health` จากมือถือ (คนละเครื่องกับที่รัน docker, ต่อเครือข่ายเดียวกัน) → ได้ `"status":"ok"`, `model_version: "1"` (2026-10-05) · ต้องพิมพ์ `http://` และ `:8000` ให้ครบ ไม่งั้นเบราว์เซอร์มือถือจะไปพอร์ต 80/https
 
 ### ปัญหาที่เจอและวิธีแก้
 - p95 รอบแรก 240 ms > SLO → สาเหตุคือ predict ทีละแถวผ่าน MLflow pyfunc + lookup ใน MultiIndex ทุก request ทำให้ CPU เต็มที่ ~110 RPS → คำนวณล่วงหน้าตอนโหลด (p95 ~19 ms, RPS 155 ใน docker)
