@@ -7,11 +7,11 @@
 |---|---|---|---|
 | 0 | สมาชิกและการแบ่งงาน | M1 + ทุกคน | ⬜ |
 | 1 | Problem Framing & AI Project Canvas | M1 | ✅ |
-| 2 | Data Ingestion, Split & Validation | M2 | ⬜ |
+| 2 | Data Ingestion, Split & Validation | M2 | ✅ |
 | 3 | Feature Engineering | M3 | ⬜ |
 | 4 | Model Development & Experiment Tracking | M3 | ⬜ |
-| 5 | Model Registry, Gate & Rollback | M4 | ⬜ |
-| 6 | Serving, Infrastructure & Load Test | M4 | ⬜ |
+| 5 | Model Registry, Gate & Rollback | M4 | ✅ |
+| 6 | Serving, Infrastructure & Load Test | M4 | ✅ |
 | 7 | Monitoring, Drift & Retraining | M5 | ⬜ |
 | 8 | Pipeline DAG | M2 | ⬜ |
 | 9 | CI/CD | M5 | ⬜ |
@@ -28,7 +28,7 @@
 | M1 | | 67xxxxxxxx | @nattapongsric-collab | Project Lead / Framing / Report |
 | M2 | | 67xxxxxxxx | NongPP235 | Data Engineer |
 | M3 | | | | ML Engineer |
-| M4 | | | | Serving Engineer |
+| M4 | | | @fxlmholy | Serving Engineer |
 | M5 | ธนโชติ กมลเลิศ|673380630-1 |thanachotkam-hue | Ops Engineer |
 
 ---
@@ -84,76 +84,256 @@ pytest -q tests/test_smoke.py
 ---
 
 ## §2 Data Ingestion, Split & Validation
-**ผู้รับผิดชอบ:** M2 · **Reviewer:** M1 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M2 (@NongPP235) · **Reviewer:** M1 (@nattapongsric-collab) · **PR:** #6 · **วันที่เสร็จ:** 2026-10-04
 
 ### สิ่งที่ทำ
+- `src/ingest.py` — อ่าน csv ดิบระดับ transaction → ทำความสะอาด → รวมเป็นตาราง `date × article × qty`
+  - แปลงราคา `"0,90 €"` → `0.90` (`parse_price`)
+  - ตัดแถวที่ date/qty อ่านไม่ได้, article ว่างหรือเป็น `"."`, และ `qty <= 0` (การคืนของ/ยกเลิกบิล)
+  - เลือกสินค้าขายดี top-N (`data.top_n_items = 15`) แล้วสร้างตารางครบทุกวัน × ทุกสินค้า เติม 0 ในวันที่ไม่มีขาย
+  - cap ยอดที่เกิน Q99.9 ของสินค้านั้น (`data.outlier_quantile`)
+  - บันทึก `data/processed/daily_sales.parquet` + `data/processed/meta.json` (data version = SHA256 ของไฟล์ดิบ, รายชื่อสินค้า, สถิติ mean/std/max ของช่วง train)
+- `src/split.py` — `split_from_config()` แบ่ง train/val/test **ตามเวลา** ด้วยวันที่ใน config และ error ถ้ามีชุดไหนว่าง
+- `src/validate.py` — Pandera schema ตรวจ 6 ข้อ: ชนิดข้อมูล/ค่าว่าง, `qty >= 0`, `article ∈ known_items`, `(date, article)` ไม่ซ้ำ, ไม่มีวันหาย, สถิติอยู่ในช่วง training
+  - ไม่ผ่าน → log ERROR + เขียนต่อท้าย `logs/validation_alerts.log` + พิมพ์ตารางจุดผิด + **exit code 1**
+- `data/samples/meta.json` — meta ของไฟล์ตัวอย่าง ให้ CI ตรวจ `data/samples/` ได้โดยไม่ต้องมีข้อมูลจริง
+- `tests/test_data.py` — 10 tests (แปลงราคา, ตัดคืนของ, เติมวันหาย, top-N, cap, ไฟล์ดี/เสีย, ซ้ำ/วันหาย, สถิติผิดปกติ, exit code, split ว่าง)
+
 ### การตัดสินใจและเหตุผล
+- **ตัด `qty <= 0` ทิ้ง แทนการ clip เป็น 0** — แถวติดลบคือการคืนของ ไม่ใช่ความต้องการซื้อ ถ้าเอามารวมจะทำให้ยอดของวันนั้นต่ำกว่าความจริง
+- **เติม 0 ในวันที่ไม่มีขาย (รวมวันที่ร้านปิด)** — ให้ lag/rolling ของ P3 นับวันได้ถูก (lag_7 = 7 วันจริง ไม่ใช่ 7 แถว)
+- **cap ที่ Q99.9 แทนการลบแถว** — ยอดสูงมาก ๆ อาจเป็นออเดอร์จัดเลี้ยงจริง ลบทิ้งจะทำให้วันหาย แต่ถ้าปล่อยไว้ loss จะถูกดึงด้วยวันเดียว
+- **คำนวณเพดาน cap และสถิติอ้างอิงจากช่วง train เท่านั้น** — กันข้อมูลของ val/test รั่วเข้ามา (leakage)
+- **แบ่งตามเวลา ไม่สุ่ม** — งานนี้คือทำนายอนาคต ถ้าสุ่มโมเดลจะเห็นยอดของวันหลังวันที่ทำนาย ได้คะแนนดีเกินจริง
+- **Pandera `lazy=True` + `coerce=True`** — แปลงชนิดก่อนตรวจ (`"abc"`, `"2022-13-45"` ถูกจับ) และรวบรวม error ทุกจุดในครั้งเดียว แทนที่จะหยุดที่จุดแรก
+- **เกณฑ์สถิติ**: mean ของ batch ต้องอยู่ใน `mean_train ± 3·std_train` และ max ต้องไม่เกิน `3 × max_train` — จับค่าที่พิมพ์ผิด/ระบบส่งมาผิดหน่วยได้ โดยไม่ล้มกับวันขายดีปกติ
+
 ### ผลลัพธ์ / หลักฐาน
+- `python -m src.validate data/samples/bad_sales.csv` → **exit 1** พบ 12 จุดผิด ครอบคลุม: `qty = -5`, วันที่ `2022-13-45`, `UNKNOWN ITEM`, `qty = abc`, `qty` ว่าง, `(date, article)` ซ้ำ, มีวันหาย
+- `python -m src.validate data/samples/good_sales.csv` → **exit 0**
+- `ruff check .` ผ่าน · `pytest -q` ผ่าน 16 tests
+- ทดสอบ `ingest → validate → split` ครบวงจรกับไฟล์ดิบจำลองรูปแบบเดียวกับ Kaggle (20 สินค้า, 2021-01-02 ถึง 2022-09-30) → ได้ 15 สินค้า × 637 วัน, validate ผ่าน, split ไม่มีชุดว่าง
+- **ผลกับข้อมูลจริง (Kaggle Bakery sales.csv):**
+  - clean: ตัดแถวเสีย 5 แถว, ตัดแถวคืนของ (qty <= 0) 1,295 แถว → เหลือ 232,705 transactions
+  - cap ที่ Q99.9 (เพดานจากช่วง train) 34 แถว
+  - ได้ 9,555 แถว = 15 สินค้า × 637 วัน (2021-01-02 ถึง 2022-09-30)
+  - data version (SHA256): `af5eede55b6eb2efb6bebb0e6dd1a51568c7eb73554d2f8ad2563081025681b2`
+  - 15 สินค้า: BAGUETTE, BANETTE, BOULE 400G, CAMPAGNE, CEREAL BAGUETTE, COOKIE, COUPE, CROISSANT, ECLAIR, FORMULE SANDWICH, PAIN AU CHOCOLAT, SPECIAL BREAD, TARTELETTE, TRADITIONAL BAGUETTE, VIK BREAD
+  - สถิติช่วง train (ใช้ตรวจ anomaly): mean 27.44, std 50.61, max 538 ชิ้น/วัน
+  - `python -m src.validate` กับไฟล์ processed → PASSED
+  - split: train 2021-01-02 → 2022-06-30 (8,175 แถว) · val 2022-07-01 → 2022-08-31 (930 แถว) · test 2022-09-01 → 2022-09-30 (450 แถว)
+  - screenshot ไฟล์เสียถูกจับ: `docs/evidence/p2_bad_data_caught.png`
+
 ### ปัญหาที่เจอและวิธีแก้
+- CI ไม่มีไฟล์ข้อมูลจริง (gitignored) จึงไม่มี `meta.json` → ให้ `validate` ใช้ `data/samples/meta.json` แทนอัตโนมัติเมื่อยังไม่เคยรัน ingest
+- ไฟล์จริงมีสินค้าชื่อ `"."` → ตัดออกตอน clean
+
 ### การใช้ AI
+- ใช้ Claude Code ช่วยเขียน `ingest.py`, `validate.py`, `split_from_config()`, `tests/test_data.py` และร่าง section นี้; ตรวจสอบโดยรัน `ruff` + `pytest` และลองรันกับไฟล์ดี/เสีย (M2 ต้องอ่านและอธิบายได้ทุกบรรทัดก่อน merge)
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+# 1) วาง "Bakery sales.csv" จาก Kaggle ไว้ที่ data/raw/
+python -m src.ingest                                   # → data/processed/daily_sales.parquet + meta.json
+python -m src.validate                                 # ตรวจไฟล์ processed (ผ่าน = exit 0)
+python -m src.split                                    # ดูช่วงวันที่/จำนวนแถวของ train/val/test
+# 2) สาธิตข้อมูลเสีย
+python -m src.validate data/samples/bad_sales.csv; echo $?   # → 1
+pytest -q tests/test_data.py
+```
 
 ---
 
 ## §3 Feature Engineering
 **ผู้รับผิดชอบ:** M3 · **Reviewer:** M2 · **PR:** # · **วันที่เสร็จ:**
 
-### สิ่งที่ทำ
-### การตัดสินใจและเหตุผล
-### ผลลัพธ์ / หลักฐาน
-### ปัญหาที่เจอและวิธีแก้
-### การใช้ AI
-### วิธีรัน/ทดสอบส่วนนี้
+### สิ่งที่ทำ พัฒนา src/features.py เพื่อสร้างคุณลักษณะสำหรับการพยากรณ์ยอดขายรายวันของสินค้าแต่ละชนิด โดยใช้ build_features(history_df, target_date) คุณลักษณะที่สร้างประกอบด้วย
+Lag features: lag_1, lag_7, lag_14
 
+Rolling statistics: rolling_mean_7, rolling_mean_28, rolling_std_7
+
+Calendar features: day_of_week, month, is_weekend
+
+Holiday feature: is_holiday สำหรับวันหยุดของประเทศฝรั่งเศส
+
+Item encoding: item_encoded สำหรับแทนรหัสสินค้าในรูปแบบตัวเลข
+
+### การตัดสินใจและเหตุผล ใช้ข้อมูลยอดขายย้อนหลังในการสร้าง Lag และ Rolling features โดยเลื่อนข้อมูลก่อนคำนวณสถิติ เพื่อป้องกันการนำยอดขายของวันเดียวกันหรือข้อมูลอนาคตมาใช้เป็นตัวทำนาย ส่วนคุณลักษณะปฏิทินช่วยให้โมเดลเรียนรู้รูปแบบยอดขายตามวันและช่วงเวลาได้
+
+### ผลลัพธ์ / หลักฐาน มีการทดสอบ build_features ครอบคลุมการสร้างคอลัมน์ที่จำเป็น การคำนวณ Lag และ Rolling จากข้อมูลในอดีต และการตรวจสอบว่าการเปลี่ยนแปลงยอดขายในอนาคตไม่ส่งผลต่อ Features ในอดีต ผลการทดสอบ tests/test_features.py ผ่าน 3 tests
+### ปัญหาที่เจอและวิธีแก้ ต้องระวัง Data Leakage จากการคำนวณ Rolling statistics จึงใช้ข้อมูลที่เลื่อนย้อนหลังหนึ่งช่วงก่อนคำนวณ และทดสอบด้วยการเปลี่ยนข้อมูลในอนาคตเพื่อตรวจสอบความถูกต้อง
+### การใช้ AI ใช้ AI ช่วยวางแนวทางการสร้าง Features ตรวจสอบการป้องกัน Data Leakage และช่วยออกแบบกรณีทดสอบ โดยตรวจสอบโค้ดและผลการทดสอบก่อนนำไปใช้
+### วิธีรัน/ทดสอบส่วนนี้ 
+conda run -n mlops-m3 python -m pytest tests/test_features.py -v
 ---
 
 ## §4 Model Development & Experiment Tracking
 **ผู้รับผิดชอบ:** M3 · **Reviewer:** M2 · **PR:** # · **วันที่เสร็จ:**
 
-### สิ่งที่ทำ
-### การตัดสินใจและเหตุผล
+### สิ่งที่ทำ พัฒนา src/train.py สำหรับเตรียมข้อมูลยอดขายรายวัน สร้าง Features ฝึกโมเดล 4 แบบ และบันทึกผลการทดลองด้วย MLflow ได้แก่ Seasonal-naive, Linear Regression, LightGBM default และ LightGBM tuned โดยบันทึกพารามิเตอร์ ตัวชี้วัด รุ่นโค้ด ค่า SHA256 ของ Dataset เวอร์ชัน Python ไฟล์ requirements.txt รายการ Features โมเดล กราฟ Actual vs Predicted และผลวิเคราะห์ SHAP สำหรับโมเดลที่รองรับ
+### การตัดสินใจและเหตุผล ใช้ WAPE เป็นตัวชี้วัดหลักสำหรับเปรียบเทียบโมเดลบน Validation set เนื่องจากต้องการประเมินความคลาดเคลื่อนเทียบกับยอดขายจริง เลือกโมเดลจากผล Validation และใช้ Test set สำหรับรายงานผลประเมินขั้นสุดท้ายเท่านั้น
 ### ผลลัพธ์ / หลักฐาน
-| Run | โมเดล | Hyperparams | WAPE | MAE | Pinball@q | Stockout | Waste | ผ่าน Gate? |
-|---|---|---|---|---|---|---|---|---|
-| 1 | Seasonal-naive | – | | | | | | |
-| 2 | Linear Regression | | | | | | | |
-| 3 | LightGBM default | | | | | | | |
-| 4 | LightGBM tuned | | | | | | | |
+ Run | โมเดล | Hyperparams | WAPE | MAE | Pinball@q | Stockout | Waste | ผ่าน Gate? |
+|---|---|---|---:|---:|---:|---:|---:|---|
+| 1 | Seasonal-naive | lag=7 | 0.367764 | 2.508227 | 1.268413 | 1.325612 | 1.182615 | ยังไม่ยืนยัน |
+| 2 | Linear Regression | StandardScaler + LinearRegression | 0.321740 | 2.194328 | 1.096773 | 1.095211 | 1.099117 | ยังไม่ยืนยัน |
+| 3 | LightGBM default | random_state=42 | 0.271485 | 1.851584 | 0.945858 | 1.026123 | 0.825461 | ยังไม่ยืนยัน |
+| 4 | LightGBM tuned | objective=quantile, alpha=0.6, n_estimators=300, learning_rate=0.03, num_leaves=31 | 0.296807 | 2.024280 | 1.047296 | 1.187919 | 0.836361 | ยังไม่ยืนยัน |
 
-### ปัญหาที่เจอและวิธีแก้
-### การใช้ AI
-### วิธีรัน/ทดสอบส่วนนี้
+  ### ปัญหาที่เจอและวิธีแก้ 
+ปัญหาการติดตามผลการทดลอง: ต้องเปรียบเทียบผลลัพธ์ของโมเดลทั้ง 4 แบบ จึงใช้ MLflow บันทึกพารามิเตอร์ ตัวชี้วัด และ artifacts ของแต่ละการทดลอง เพื่อให้สามารถตรวจสอบและเปรียบเทียบผลได้
 
+ปัญหาการเลือกโมเดล: โมเดลแต่ละแบบให้ผลลัพธ์แตกต่างกัน จึงใช้ค่า WAPE บน Validation Set เป็นเกณฑ์หลักในการเปรียบเทียบ โดย LightGBM Default ให้ค่า WAPE ต่ำที่สุดที่ 0.271485 หรือประมาณ 27.15%
+
+ปัญหาการอธิบายผลโมเดล: ใช้ SHAP วิเคราะห์ความสำคัญของ features เพื่อช่วยอธิบายว่าตัวแปรใดมีผลต่อการพยากรณ์ ทั้งนี้ผลการวิเคราะห์ควรพิจารณาร่วมกับกราฟและไฟล์ SHAP ที่บันทึกไว้ใน MLflow
+  ### การใช้ AI
+  ใช้ AI ช่วยสนับสนุนการพัฒนาโค้ดสำหรับการฝึกโมเดล การบันทึกผลการทดลองด้วย MLflow และการจัดทำรายงาน รวมถึงช่วยตรวจสอบข้อผิดพลาดและปรับปรุงการเปรียบเทียบผลลัพธ์ โดยมีการตรวจสอบผลการรันและผลการทดสอบก่อนนำไปใช้งาน
+  ### วิธีรัน/ทดสอบส่วนนี้
+เปิดใช้งาน MLflow Tracking Server ที่ http://localhost:5001
+
+รันสคริปต์ฝึกโมเดลด้วยคำสั่ง python src/train.py
+
+เปิดหน้า MLflow ที่ http://localhost:5001 เพื่อเปรียบเทียบผลการทดลองทั้ง 4 โมเดล
+
+ตรวจสอบค่า WAPE, MAE, Pinball Loss, Stockout Proxy และ Waste Proxy รวมถึง artifacts ของโมเดลและไฟล์ SHAP
+
+ทดสอบโค้ดด้วยคำสั่ง python -m pytest -q และตรวจสอบรูปแบบโค้ดด้วย ruff check .
 ---
 
 ## §5 Model Registry, Gate & Rollback
-**ผู้รับผิดชอบ:** M4 · **Reviewer:** M3 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M4 (@fxlmholy) · **Reviewer:** M3 · **PR:** # · **วันที่เสร็จ:** 2026-10-04
 
 ### สิ่งที่ทำ
+- `src/evaluate_gate.py` — ด่านตรวจก่อนอนุมัติโมเดล อ่านผลจาก MLflow run ที่ `train.py` (M3) log ไว้
+  1. หา run ล่าสุดของแต่ละโมเดล → baseline = `seasonal_naive`
+  2. เลือก candidate ที่มีโมเดลและ **WAPE (validation) ต่ำสุด** (หรือระบุ `--run-id`)
+  3. ตรวจ gate จาก `configs/config.yaml`: WAPE ดีกว่า seasonal-naive ≥ 10% · ขนาดโมเดล < 50 MB · (p95 latency < 200 ms เมื่อส่งค่าจาก load test มา)
+  4. ไม่ผ่าน → **ไม่ลงทะเบียน** และ exit code 1 (ใช้ใน CI/flow ให้หยุดได้)
+  5. ผ่าน → ลงทะเบียนเวอร์ชันใหม่ alias `challenger` → ถ้า WAPE ดีกว่า `champion` → promote
+- `src/registry.py` — `status` / `promote <v>` / `rollback` ด้วย MLflow alias + tag `status` (`challenger` / `champion` / `archived`) และเก็บประวัติ champion ใน tag `champion_history` ของ registered model
+- API (§6) มี `POST /reload` → หลัง promote/rollback โหลด champion ใหม่ได้โดยไม่ต้อง restart
+- `tests/test_registry_gate.py` — ทดสอบกฎ gate, เคส promote / v2 แย่กว่าไม่ถูก promote / gate ไม่ผ่านไม่ลงทะเบียน / rollback / run ที่ไม่มีโมเดลลงทะเบียนไม่ได้ (ใช้ MLflow file store ใน tmp ไม่ต้องเปิด server)
+
 ### การตัดสินใจและเหตุผล
+- **ใช้ alias แทน stage** (Staging/Production) เพราะ MLflow 2.9+ เลิกแนะนำ stage แล้ว และการย้าย alias เป็นคำสั่งเดียว → rollback ทำได้ทันที
+- **เก็บประวัติ champion เอง** (tag `champion_history`) แทนการเดาว่า "เวอร์ชันก่อน = version−1" เพราะเวอร์ชันที่ถูก reject (ค้างเป็น challenger) ไม่ควรถูก rollback กลับไปใช้
+- **เลือกโมเดลจาก validation WAPE** ตามที่ M1 กำหนด (`metrics.optimizing: wape`); test set ใช้รายงานผลเท่านั้น ไม่ใช้ตัดสิน
+- **เทียบกับ champion ด้วย WAPE ที่ log ไว้ใน run** (ไม่ประเมินใหม่) เพื่อให้ gate เร็วและไม่ต้องโหลดข้อมูล — ข้อจำกัด: ถ้า champion เทรนบนข้อมูลคนละชุด ตัวเลขอาจเทียบกันไม่ตรง 100%
+- gate ไม่ผ่าน → exit code ≠ 0 เพื่อให้ Prefect flow (P7) และ CI job model-gate (P8) หยุดได้ทันที
+
 ### ผลลัพธ์ / หลักฐาน
+ผลรันจริงเต็มวงจรด้วย**ข้อมูล Kaggle จริง** (MLflow ใน docker) → [`docs/evidence/p4_registry_demo.txt`](docs/evidence/p4_registry_demo.txt)
+
+| ขั้น | ผล |
+|---|---|
+| gate รอบแรก (`lightgbm_default`) | WAPE (validation) 0.192 vs seasonal-naive 0.288 (ดีขึ้น 33% ≥ 10%) · 0.26 MB → ✅ ผ่าน → **v1 champion** |
+| โมเดลที่แย่กว่า (`linear_regression`) | WAPE 0.223 ผ่าน gate (ดีกว่า naive 23%) แต่แพ้ v1 → ค้างเป็น **challenger** ไม่ถูก promote |
+| promote v2 → `/reload` | API เปลี่ยนเป็น `model_version: "2"` |
+| `rollback` → `/reload` | champion กลับเป็น v1, v2 = `archived`, API ตอบ `model_version: "1"` |
+| pytest | `tests/test_registry_gate.py` ผ่าน 3/3 |
+
+Screenshot MLflow Model Registry (v1 = `@champion`, v2 = `archived` + `rolled_back`, v3 = `@challenger`, tag `champion_history` ของ registered model):
+
+![MLflow registry](docs/evidence/p4_mlflow_registry.png)
+
 ### ปัญหาที่เจอและวิธีแก้
+- `list_artifacts` error *"mlflow-artifacts URI ... tracking URI must be http"* — เพราะ artifact แบบ proxy อ้างอิง tracking URI ตัว global → `registry.get_client()` ตั้ง `mlflow.set_tracking_uri()` ด้วย
+- pip ติดตั้ง SQLAlchemy 2.1 ซึ่ง MLflow 2.17 ใช้ backend แบบ sqlite ไม่ได้ (`ImportError FallbackAsyncAdaptedQueuePool`) → test ของ P4 เปลี่ยนไปใช้ MLflow file store แทน (ไม่แก้ `requirements.txt` เพราะเป็นไฟล์ส่วนกลาง — เสนอให้ทีม pin `sqlalchemy==2.0.36` ถ้าจะรัน MLflow server นอก docker)
+- `search_model_versions` ไม่คืน alias → `status` ดึง `get_model_version` ทีละเวอร์ชัน
+- MLflow file store คืนเลขเวอร์ชันเป็น int แต่ server คืนเป็น str → เทียบด้วย `str()` เสมอ
+
 ### การใช้ AI
+- ใช้ Claude (Claude Code) ช่วยเขียน `evaluate_gate.py`, `registry.py`, test และร่างรายงานส่วนนี้; ตรวจสอบโดยรัน pytest, รันเต็มวงจร train → gate → promote → rollback กับ MLflow server จริง และอ่านโค้ดทุกบรรทัดก่อน commit
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+pytest -q tests/test_registry_gate.py          # unit test (ไม่ต้องเปิด MLflow)
+docker compose up -d mlflow                    # หรือ mlflow server --port 5000
+python -m src.train                            # M3: log 4 runs
+python -m src.evaluate_gate                    # gate → challenger → (champion)
+python -m src.evaluate_gate --run-id <run_id>  # สาธิต v2 ที่แย่กว่า
+python -m src.registry status
+python -m src.registry promote 2
+python -m src.registry rollback                # หรือ make rollback
+curl -X POST http://localhost:8000/reload      # ให้ API โหลด champion ใหม่
+```
 
 ---
 
 ## §6 Serving, Infrastructure & Load Test
-**ผู้รับผิดชอบ:** M4 · **Reviewer:** M3 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M4 (@fxlmholy) · **Reviewer:** M3 · **PR:** # · **วันที่เสร็จ:** 2026-10-04
 
 ### สิ่งที่ทำ
+- `api/model_service.py` — โหลด `models:/bakery-demand-model@champion` จาก MLflow + ประวัติยอดขายจาก `data/processed/daily_sales.parquet`
+  - สร้าง feature ด้วย **`src.features.build_features` ตัวเดียวกับตอน train** และเรียงคอลัมน์ตาม `feature_list.json` ที่ train.py log ไว้ → กัน Training–Serving Skew
+  - ส่งประวัติ **ทุกสินค้าพร้อมกัน** เข้า build_features (item_encoded ได้ค่าเดียวกับตอน train) และเติมแถว "พรุ่งนี้" (qty = NaN) ให้ lag/rolling คำนวณจากอดีต
+  - คำนวณค่าทำนายของทุก (วันที่, สินค้า) ไว้ล่วงหน้าตอนโหลดโมเดล → request จริงเป็นแค่ lookup
+  - **p50 / p_q ของ q ใดก็ได้** = ŷ + quantile_q(residual) โดย residual = ยอดจริง − ŷ บนช่วง validation **แยกรายสินค้า**
+  - `python -m api.model_service` = **batch** พยากรณ์พรุ่งนี้ทุกสินค้า → `data/processed/predictions/<date>.csv` (ให้ Prefect flow P7 เรียกตอนกลางคืน)
+- `api/main.py` (FastAPI)
+  - `POST /predict {article, date}` → `{p50, p_q, q, model_version}`
+  - `POST /recommend {article, date, on_hand, unit_price, unit_cost}` → `{forecast (=F_q), p50, q, recommended_qty, model_version}` (newsvendor: `q = (price−cost)/price`, `qty = max(0, ceil(F_q) − on_hand)` จาก `src/recommend.py`)
+  - `GET /health` (สถานะ + model version + ช่วงวันที่ทำนายได้) · `GET /metrics` (Prometheus) · `GET /articles` · `POST /reload` (โหลด champion ใหม่หลัง promote/rollback)
+  - **422** กับ: date ผิดรูปแบบ, field หาย, ชนิดผิด, ค่าติดลบ, ต้นทุน > ราคา, field แปลกปลอม, JSON เสีย, **article ไม่รู้จัก**, **date ไกลเกิน/เก่าเกินช่วงที่มีข้อมูล** · **503** เมื่อยังไม่มีโมเดล (ไม่ใช่ 500)
+  - **JSON log 1 บรรทัดต่อ request**: `request_id` (รับจาก header `X-Request-ID` ได้), `latency_ms`, `model_version`, `input`, `output`
+  - Prometheus: `requests_total{endpoint,status}`, `request_latency_seconds` (histogram), `model_loaded`, `model_version`
+- `docker-compose.yml` — mlflow (มี healthcheck) → api รอ mlflow พร้อมก่อน, mount `./data/processed` เข้า api แบบ read-only, `restart: unless-stopped` · `.dockerignore` กันไม่ให้ส่งข้อมูล/mlflow_data เข้า image
+- `loadtest/locustfile.py` — สุ่มสินค้าจาก `/articles` และวันที่จาก `/health`, predict : recommend = 3 : 1
+- `tests/test_api_validation.py` — 25 tests: ตอบถูก, newsvendor, 422 ทุกกรณีข้างบน, 503, /metrics, และ setup ใช้ build_features จริง
+
 ### การตัดสินใจและเหตุผล
+- **Serving pattern = Batch + Real-time**: ร้านต้องรู้ยอดก่อนเริ่มอบตอนเช้า → batch กลางคืนพยากรณ์ทุกสินค้า (ไม่มี latency กดดัน, เสร็จก่อน 06:00 ตาม SLO) ส่วน API real-time ใช้ถามรายสินค้า/ปรับจำนวนตามของที่เหลือ (`on_hand`) และราคา–ต้นทุนของวันนั้น ซึ่งรู้แค่ตอนถาม
+- **คำนวณ ŷ ล่วงหน้าตอนโหลดโมเดล** (เทียบกับรัน build_features + predict ทุก request): รอบแรกทำทุก request ได้ p95 = 240 ms (ตก SLO) → หลังเปลี่ยนเหลือ ~19 ms เพราะ feature ของวันหนึ่งไม่ขึ้นกับ request อยู่แล้ว
+- **p_q จาก residual แทนการเทรนโมเดล quantile ทุกค่า q**: newsvendor ต้องใช้ q ที่เปลี่ยนตามราคา/ต้นทุน (เช่น 0.67) แต่ train.py เทรน quantile เดียว (0.6) → ใช้ empirical residual quantile บน validation (ข้อมูลที่โมเดลไม่เคยเห็น) ปรับได้ทุก q จากโมเดลเดียว · แยกรายสินค้าเพราะสินค้าขายเยอะคลาดเคลื่อนเป็นชิ้นมากกว่า (รวมกันทำให้ช่วงแคบเกินจริงสำหรับ baguette)
+- **422 สำหรับ article ไม่รู้จัก/date นอกช่วง** (แทน 404/500) เพื่อให้ client แยกได้ชัดว่า "input ผิด" รูปแบบ error เดียวกับ Pydantic
+- **API เปิดได้แม้ไม่มีโมเดล** (`/health` = degraded, predict = 503) เพื่อไม่ให้ container restart วนตอน MLflow ยังไม่พร้อม; ใช้ `/reload` แทนการ restart container หลัง rollback
+- uvicorn 1 worker: `/reload` เปลี่ยนโมเดลใน process เดียวได้ทันที (หลาย worker ต้อง reload ทุกตัว) และ throughput ที่วัดได้เกินพอสำหรับร้านเดียว
+
 ### ผลลัพธ์ / หลักฐาน
+Locust 50 users, spawn 10/s, 60 วินาที — **API ใน docker container, ข้อมูล Kaggle จริง, uvicorn 1 worker** → [`p5_docker_loadtest_stats.csv`](docs/evidence/p5_docker_loadtest_stats.csv), [`p5_docker_loadtest_summary.txt`](docs/evidence/p5_docker_loadtest_summary.txt)
+
 | Metric | SLO | วัดได้ | ผ่าน? |
 |---|---|---|---|
-| p50 latency | – | | |
-| p95 latency | < 200 ms | | |
-| Throughput (RPS) | – | | |
-| Error rate | < 1% | | |
+| p50 latency (/predict, /recommend) | – | 8 ms | ✅ |
+| p95 latency | < 200 ms | 18–19 ms | ✅ |
+| p99 latency | – | 36–37 ms | ✅ |
+| Throughput (RPS) | – | 155 req/s (9,219 requests) | ✅ |
+| Error rate | < 1% | 0% (0 failures) | ✅ |
+
+- **Docker compose ใช้งานได้จริง** → [`docs/evidence/p5_api_demo.txt`](docs/evidence/p5_api_demo.txt): `docker compose up -d --build` → mlflow healthy → api เปิดแบบ degraded (ยังไม่มี champion) → ingest + train + gate จากเครื่อง host เข้า mlflow ใน container → `POST /reload` → API โหลด v1 ผ่าน artifact proxy ของ mlflow และอ่านข้อมูลจาก volume ที่ mount
+- ตัวอย่างจริง: `/predict` TRADITIONAL BAGUETTE 2022-09-15 → p50 119.6, p60 132.4 · `/recommend` CROISSANT (ราคา 1.10 ต้นทุน 0.40 → q = 0.64, มีของ 10 ชิ้น) → เตรียมเพิ่ม 14 ชิ้น
+- 422 กับ on_hand ติดลบ / สินค้าไม่รู้จัก (PIZZA) / วันที่ไกลเกิน, JSON log ใน `docker logs`, `/metrics`, และ Prometheus scrape `api:8000` ได้ (`up = 1`) → [`p5_api_demo.txt`](docs/evidence/p5_api_demo.txt)
+- `pytest tests/test_api_validation.py` ผ่าน 25/25 (รวมกับ build_features ของ M3)
+
+Screenshot `POST /recommend` จากหน้า `/docs` (Swagger UI) — ตอบ 200 พร้อม `recommended_qty` และ header `x-request-id`:
+
+![API /docs recommend](docs/evidence/p5_api_docs.png)
+
+> TODO: ให้สมาชิกอีกคน `curl http://<IP เครื่องที่รัน>:8000/health` จากเครื่องของตัวเอง
 
 ### ปัญหาที่เจอและวิธีแก้
+- p95 รอบแรก 240 ms > SLO → สาเหตุคือ predict ทีละแถวผ่าน MLflow pyfunc + lookup ใน MultiIndex ทุก request ทำให้ CPU เต็มที่ ~110 RPS → คำนวณล่วงหน้าตอนโหลด (p95 ~19 ms, RPS 155 ใน docker)
+- Locust บน Windows: `--host http://localhost` ทำให้ request แรกของแต่ละ user ช้า ~2 วินาที (ลอง IPv6 ก่อน) → ใช้ `http://127.0.0.1:8000`
+- MLflow server บน Windows เขียน artifact ไม่ได้เมื่อ path ยาวเกิน 260 ตัวอักษร → ใช้ artifact path สั้น (ใน docker ไม่เจอปัญหานี้)
+- API container เปิดก่อน MLflow พร้อม → ใส่ healthcheck ให้ mlflow + `depends_on: service_healthy`; ถ้ายังไม่มี champion API ไม่ crash แต่ `/health` = degraded แล้วใช้ `POST /reload` หลัง gate
+- build image ครั้งแรกนาน (~10 นาที) เพราะติดตั้ง requirements ทั้งหมดรวม prefect/evidently/locust — รอบต่อไปใช้ cache; ถ้าต้องการ image เล็กลงควรแยก requirements เฉพาะ API (ไม่ได้ทำเพื่อไม่แก้ไฟล์ส่วนกลาง)
+- ข้อสังเกตให้ M3: `item_encoded` คิดจาก `factorize` ของสินค้าที่อยู่ในข้อมูล → ถ้าตอน train กับตอน serve มีชุดสินค้าไม่เท่ากัน รหัสจะเลื่อน (API แก้ฝั่งตัวเองโดยใช้ข้อมูลชุดเดียวกับที่ train เขียนไว้ทั้งหมด) แนะนำให้ log รายชื่อสินค้าเป็น artifact ของ run
+
 ### การใช้ AI
+- ใช้ Claude (Claude Code) ช่วยเขียน `api/model_service.py`, `api/main.py`, `api/schemas.py`, test, locustfile, docker-compose และร่างรายงานส่วนนี้; ตรวจสอบโดยรัน pytest, ยิง API จริงทุก endpoint, ทดสอบ promote/rollback + reload, รัน Locust และอ่านโค้ดทุกบรรทัดก่อน commit
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+pytest -q tests/test_api_validation.py
+docker compose up -d --build            # หรือ make serve  (ต้องมี data/processed + champion ใน MLflow)
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" \
+  -d '{"article":"TRADITIONAL BAGUETTE","date":"2022-09-15"}'
+curl -X POST http://localhost:8000/recommend -H "Content-Type: application/json" \
+  -d '{"article":"TRADITIONAL BAGUETTE","date":"2022-09-15","on_hand":10,"unit_price":1.2,"unit_cost":0.4}'
+python -m api.model_service             # batch พยากรณ์พรุ่งนี้ทุกสินค้า
+locust -f loadtest/locustfile.py --headless -u 50 -r 10 -t 60s --host http://127.0.0.1:8000 --csv docs/evidence/loadtest
+```
 
 ---
 
