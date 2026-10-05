@@ -24,17 +24,26 @@ pip install -r requirements.txt
 # 1) ดาวน์โหลด Kaggle "French Bakery Daily Sales"
 #    วางไฟล์ไว้ที่ data/raw/Bakery sales.csv (ชื่อไฟล์ต้องตรง — ดู configs/config.yaml → paths.raw)
 
-# 2) เปิด service ทั้งหมด (MLflow :5000, API :8000, Prometheus :9090, Grafana :3000)
+# 2) เปิด service (MLflow :5000, API :8000, Prometheus :9090, Grafana :3000)
+#    ครั้งแรก build image ~10 นาที · API จะขึ้นสถานะ degraded จนกว่าจะมีโมเดล champion (ปกติ)
 docker compose up -d --build
 
-# 3) รัน pipeline ทั้งหมดด้วยคำสั่งเดียว: ingest → validate → split → train → gate → register → batch predict
-make pipeline            # หรือ: python -m src.flow
+# 3) ข้อมูล → โมเดล → registry (รันจากเครื่อง host ส่งผลเข้า MLflow ใน container)
+python -m src.ingest          # raw csv → data/processed/daily_sales.parquet + meta.json
+python -m src.validate        # ตรวจ schema (ไม่ผ่าน = exit 1 → หยุด)
+python -m src.train           # เทรน 4 โมเดล log เข้า MLflow
+python -m src.evaluate_gate   # ผ่าน gate → ลงทะเบียน → @champion
+#    เมื่อ P7 เสร็จ: ขั้นที่ 3 ทั้งหมด = make pipeline  (python -m src.flow)
 
-# 4) ทดสอบ API
-curl -X POST http://localhost:8000/recommend -H "Content-Type: application/json"   -d '{"article":"TRADITIONAL BAGUETTE","date":"2022-09-15","on_hand":10,"unit_price":1.2,"unit_cost":0.4}'
+# 4) ให้ API โหลด champion แล้วทดสอบ
+curl -X POST http://localhost:8000/reload
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/recommend -H "Content-Type: application/json" \
+  -d '{"article":"TRADITIONAL BAGUETTE","date":"2022-09-15","on_hand":10,"unit_price":1.2,"unit_cost":0.4}'
 ```
 
 > **Windows PowerShell:** ใช้ `curl.exe` แทน `curl` หรือเปิด http://localhost:8000/docs แล้วกด "Try it out"
+> **ข้อควรระวัง:** ถ้ารัน MLflow server นอก docker แล้ว error `FallbackAsyncAdaptedQueuePool` ให้ `pip install sqlalchemy==2.0.36` (ดู report §5)
 
 ## คำสั่งที่ใช้บ่อย
 | คำสั่ง | ถ้าไม่มี make ให้รัน | ทำอะไร |
@@ -42,9 +51,11 @@ curl -X POST http://localhost:8000/recommend -H "Content-Type: application/json"
 | `make pipeline` | `python -m src.flow` | รันทั้ง DAG raw → serving |
 | `make serve` | `docker compose up -d --build` | เปิดทุก service |
 | `make test` | `ruff check . && pytest -q` | lint + test |
-| `make loadtest` | ดู `Makefile` | วัด p50/p95 latency + RPS |
+| `make loadtest` | ดู `Makefile` (Windows ใช้ `--host http://127.0.0.1:8000`) | วัด p50/p95 latency + RPS |
 | `make drift` | `python -m src.simulate_drift && python -m src.monitor` | สาธิต data/concept drift |
-| `make rollback` | `python -m src.registry rollback` | ย้าย `champion` กลับเวอร์ชันก่อน |
+| `make rollback` | `python -m src.registry rollback` แล้ว `curl -X POST localhost:8000/reload` | ย้าย `champion` กลับเวอร์ชันก่อน |
+| — | `python -m src.registry status` | ดูเวอร์ชัน / alias ทั้งหมด |
+| — | `python -m api.model_service` | batch พยากรณ์พรุ่งนี้ทุกสินค้า → `data/processed/predictions/` |
 | `make down` | `docker compose down` | ปิดทุก service |
 
 ## สาธิตข้อมูลเสีย
@@ -54,7 +65,7 @@ python -m src.validate data/samples/bad_sales.csv   # ต้องล้ม (exi
 
 | Service | URL |
 |---|---|
-| API docs | http://localhost:8000/docs |
+| API docs (Swagger) | http://localhost:8000/docs |
 | MLflow | http://localhost:5000 |
 | Prefect UI | http://localhost:4200 (เปิดด้วย `prefect server start` ใน terminal แยก) |
 | Prometheus | http://localhost:9090 |
