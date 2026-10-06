@@ -1,4 +1,4 @@
-# 🥖 Bakery Daily Demand Prediction — CP413008 MLOps Project
+# Bakery Daily Demand Prediction — CP413008 MLOps Project
 
 [![CI](https://github.com/fxlmholy/MLops/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/fxlmholy/MLops/actions/workflows/ci.yml)
 
@@ -64,7 +64,7 @@ curl -X POST http://localhost:8000/recommend -H "Content-Type: application/json"
 
 ## สาธิตข้อมูลเสีย
 ```bash
-python -m src.validate data/samples/bad_sales.csv   # ต้องล้ม (exit code ≠ 0) พร้อมข้อความบอกว่าผิดตรงไหน
+python -m src.validate data/samples/bad_sales.csv 
 ```
 
 | Service | URL |

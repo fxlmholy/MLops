@@ -25,9 +25,9 @@
 
 | รหัส | ชื่อ-สกุล | รหัสนักศึกษา | GitHub | บทบาท |
 |---|---|---|---|---|
-| M1 | | 67xxxxxxxx | @nattapongsric-collab | Project Lead / Framing / Report |
-| M2 | | 673380633-5 | NongPP235 | Data Engineer |
-| M3 | | | | ML Engineer |
+| M1 | ณัฐพงษ์ ศรีเชียงสา | 673380440-6 | @nattapongsric-collab | Project Lead / Framing / Report |
+| M2 | พีรพัฒน์ บรรเทิงศักดิ์ศิริ | 673380633-5 | NongPP235 | Data Engineer |
+| M3 | ภูริชญา โมรา|673380636-9 |purichayam-dot | ML Engineer |
 | M4 | จิตติพัฒน์ มูลศรี | 673380437-5 | @fxlmholy | Serving Engineer |
 | M5 | ธนโชติ กมลเลิศ|673380630-1 |thanachotkam-hue | Ops Engineer |
 
