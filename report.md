@@ -14,7 +14,7 @@
 | 6 | Serving, Infrastructure & Load Test | M4 | ✅ |
 | 7 | Monitoring, Drift & Retraining | M5 | 🟨 |
 | 8 | Pipeline DAG | M2 | ⬜ |
-| 9 | CI/CD | M5 | ⬜ |
+| 9 | CI/CD | M5 | 🟨 |
 | 10 | Architecture, Reproducibility & สรุป | M1 | ⬜ |
 | 11 | สรุปการใช้ AI (รวมจากทุก section) | M1 | ⬜ |
 
@@ -463,14 +463,71 @@ python -m src.monitor --data <ยอดขายใหม่.parquet>          #
 ---
 
 ## §9 CI/CD
-**ผู้รับผิดชอบ:** M5 · **Reviewer:** M4 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M5 (@thanachotkam-hue) · **Reviewer:** M4 · **PR:** #18 · **วันที่เสร็จ:**
 
 ### สิ่งที่ทำ
+`.github/workflows/ci.yml` รันทุก PR และทุก push เข้า `dev`/`main` · badge อยู่บน README
+
+```
+code-quality ──► data-validation ──► model-gate
+      └────────► docker (CD)
+```
+
+| Job | ตรวจอะไร | ล้มเมื่อ |
+|---|---|---|
+| 1. **code-quality** | `ruff check .` + `pytest` (unit/data/api/registry/monitor) | lint ผิด หรือ test ใด test หนึ่งไม่ผ่าน |
+| 2. **data-validation** | Pandera schema (`src.validate`) กับ `data/samples/`: `good_sales.csv` ต้องผ่าน และ `bad_sales.csv` **ต้องถูกจับ** (exit ≠ 0) | ไฟล์ดีไม่ผ่าน หรือไฟล์เสียหลุดผ่าน schema |
+| 3. **model-gate** | เปิด MLflow (file store) → สร้างข้อมูล CI → ตรวจ schema → `src.train` (4 การทดลอง) → `src.evaluate_gate` | WAPE ดีกว่า seasonal-naive ไม่ถึง 10% หรือโมเดล ≥ 50 MB |
+| 4. **docker** (CD) | build image API จาก `Dockerfile` ทุก PR; push `ghcr.io/fxlmholy/mlops/bakery-api:{sha, dev/latest}` เมื่อ merge เข้า dev/main | build ไม่ผ่าน |
+
+- `.github/scripts/make_ci_data.py`: สร้างข้อมูลยอดขายสังเคราะห์ (15 สินค้า, 2021-01-02 → 2022-09-30, seed 42) ในรูปแบบเดียวกับผลของ `src.ingest` ให้ train และ gate รันได้ใน CI
+- ผล gate แสดงใน **Job summary** ของแต่ละ run · log การแจ้งเตือนของ validation อัปโหลดเป็น artifact `validation-alerts`
+- `concurrency`: push ใหม่ใน PR เดิมจะยกเลิก run เก่า · ทุก job มี `timeout-minutes`
+
 ### การตัดสินใจและเหตุผล
+- **เรียง job เป็นลำดับ** (code → data → model) เพราะถ้าโค้ดหรือ schema พัง การเทรนโมเดลต่อก็เสียเวลาเปล่า; docker แยกไปขนานหลัง code-quality เพราะไม่ขึ้นกับข้อมูล
+- **ใช้ข้อมูลสังเคราะห์ใน CI แทนข้อมูลจริง**: ข้อมูล Kaggle ไม่ได้ commit ลง repo (ไฟล์ใหญ่ + license ตามกฎทีมข้อ 4) และ Actions ดาวน์โหลด Kaggle ไม่ได้ถ้าไม่มี API key
+  - ข้อมูลมี pattern วันในสัปดาห์และฤดูร้อน + noise แบบ Poisson ถ้าโค้ด feature หรือ train พัง โมเดลจะชนะ seasonal-naive ไม่ถึงเกณฑ์ → CI แดง
+  - ข้อจำกัด: CI พิสูจน์ว่า pipeline และ gate ทำงานถูก ไม่ได้พิสูจน์คุณภาพบนข้อมูลจริง ตัวเลขข้อมูลจริงอยู่ใน §4–§5
+- **ใช้ `src.train` และ `src.evaluate_gate` ตัวจริง** (ไม่เขียน gate แยกสำหรับ CI) → เกณฑ์เดียวกับที่ใช้ promote โมเดลจริง (`configs/config.yaml → gate`)
+- **MLflow แบบ file store** ใน runner: ไม่ต้องพึ่ง sqlite/SQLAlchemy (ปัญหาที่เจอใน §5) และไม่ต้องใช้ service container
+- **push image เฉพาะตอน merge** (event `push`) ไม่ push ตอน PR เพื่อไม่ให้ image ของโค้ดที่ยังไม่ผ่าน review ไปอยู่ใน registry
+
 ### ผลลัพธ์ / หลักฐาน (ต้องมีทั้ง PASS และ FAIL)
+| Run | สิ่งที่ทำ | ผล | หลักฐาน |
+|---|---|---|---|
+| PASS | PR #18 (P8) | ✅ ทั้ง 4 job ผ่าน · gate: LightGBM WAPE 0.106 vs naive 0.129 (ดีกว่า 18%) | [run](https://github.com/fxlmholy/MLops/actions/runs/37453026100) · `docs/evidence/p8_ci_runs.md` |
+| FAIL 1 | PR #19 (demo): ตั้ง `min_improvement_vs_naive` = 0.50 | ❌ **code-quality** ล้ม: `test_registry_gate.py` 2 tests จับได้ว่าเกณฑ์ gate ถูกแก้ · job ถัดไปถูกข้าม | [run](https://github.com/fxlmholy/MLops/actions/runs/37453032360) |
+| FAIL 2 | PR #19 (demo): ข้อมูลที่ seasonal-naive ดีที่สุดอยู่แล้ว (ยอดวันนี้ = วันเดียวกันสัปดาห์ก่อน + noise) | ❌ **model-gate** ล้ม: `WAPE 0.083 > 0.074 (ต้องดีกว่า seasonal-naive 10%)` → ไม่ลงทะเบียนโมเดล | [run](https://github.com/fxlmholy/MLops/actions/runs/37454700982) |
+
+<!-- TODO(M5): แคปหน้าจอแท็บ Actions/Checks ของ PR #18 (เขียว) และ PR #19 (แดง) → docs/evidence/p8_ci_pass.png, p8_ci_fail.png -->
+
 ### ปัญหาที่เจอและวิธีแก้
+- **gate ไม่ผ่านแต่ CI ยังเขียว**: step `python -m src.evaluate_gate | tee gate.txt` ใช้ exit code ของ `tee` (เป็น 0 เสมอ) เพราะ shell เริ่มต้นของ Actions ไม่เปิด `pipefail`
+  - เจอจากการทำ FAIL demo ครั้งแรก
+  - แก้โดยใส่ `shell: bash` (= `bash -eo pipefail`) → gate ล้มจริงตามที่ควร
+- demo ครั้งแรก (ตั้ง threshold 50%) ไม่ถึง job model-gate เพราะ unit test ของ §5 อ่านค่าจาก config แล้วล้มก่อน → เป็นผลดี (แก้เกณฑ์ gate แบบเงียบ ๆ ไม่ได้) แต่ถ้าจะสาธิต gate โดยตรงต้องเปลี่ยนที่ข้อมูลแทน จึงทำ FAIL 2
+- ข้อมูลไม่มี noise เลย → WAPE ของทั้งโมเดลและ naive ≈ 0 แล้ว gate แสดง `0.000 > 0.000` อ่านไม่รู้เรื่อง → ใช้ random walk รายสัปดาห์ ซึ่ง naive ดีที่สุดในเชิงทฤษฎีแต่ยังมี error จริง
+- image name ของ GHCR ต้องเป็นตัวพิมพ์เล็ก (repo ชื่อ `MLops`) → ใช้ `${GITHUB_REPOSITORY,,}`
+
 ### การใช้ AI
+- ใช้ Claude ช่วยเขียน `ci.yml`, `make_ci_data.py`, ออกแบบ demo FAIL และร่างรายงานส่วนนี้
+- ตรวจสอบโดย:
+  - รันขั้นตอนของ model-gate ในเครื่อง (MLflow file store → train → gate)
+  - ดูผล run จริงบน GitHub Actions ทั้งครั้ง PASS และ FAIL
+  - อ่าน log ทุก job
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+# ทำแบบเดียวกับ CI ในเครื่อง
+ruff check . && pytest -q
+python -m src.validate data/samples/good_sales.csv            # ต้องผ่าน (exit 0)
+python -m src.validate data/samples/bad_sales.csv; echo $?   # ต้องได้ 1
+mlflow server --port 5000 --backend-store-uri ./ci_mlflow/store --artifacts-destination ./ci_mlflow/artifacts &
+python .github/scripts/make_ci_data.py                        # ⚠️ เขียนทับ data/processed/daily_sales.parquet
+python -m src.train && python -m src.evaluate_gate
+docker build -t bakery-api .
+```
 
 ---
 
