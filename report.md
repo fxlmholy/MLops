@@ -633,7 +633,9 @@ docker build -t bakery-api .
 | `ingest` → `validate` → `train` → `evaluate_gate` | ⬜ | |
 | `POST /reload` + `curl /recommend` | ⬜ | |
 | `python -m src.validate data/samples/bad_sales.csv` ล้ม (exit 1) | ⬜ | |
-| `make pipeline` (P7) | ⬜ | รอ P7 |
+| `make pipeline` (P7) — ข้อมูลดิบ → validate → train → gate → batch predict | ⬜ | |
+| `python -m src.flow --data data/samples/bad_sales.csv` → flow หยุดที่ validate (exit 1) | ⬜ | |
+| `make drift` (simulate drift + monitor) | ⬜ | |
 
 ผู้ทดสอบ: · เครื่อง/OS: · วันที่:
 
@@ -643,8 +645,8 @@ docker build -t bakery-api .
 | ตัวชี้วัด | Seasonal-naive (วิธีเดิมของร้าน) | LightGBM (champion) | เปลี่ยนแปลง | ที่มา |
 |---|---|---|---|---|
 | WAPE (validation, ข้อมูลจริงผ่าน pipeline ของ M2) | 28.8% | **19.2%** | **ดีขึ้น 33%** (gate ต้อง ≥ 10% ✅) | §5 |
-| Stockout proxy | 1.326 | 1.026 | **ลดลง 23%** | §4 |
-| Waste proxy | 1.183 | 0.825 | **ลดลง 30%** | §4 |
+| Stockout proxy | 8.27 | 5.67 | **ลดลง 31%** | §4 |
+| Waste proxy | 7.26 | 4.67 | **ลดลง 36%** | §4 |
 | Lost profit / วัน | — | — | ยังไม่ได้คำนวณ | — |
 
 | SLO (§1) | เป้า | วัดได้ (docker, 50 users) | ผ่าน? |
@@ -654,9 +656,9 @@ docker build -t bakery-api .
 | ขนาดโมเดล | < 50 MB | 0.26 MB | ✅ |
 | Throughput | – | 155 req/s | ✅ (ร้านเดียวใช้ไม่ถึง) |
 
-**สรุป:** เมื่อเทียบกับวิธีที่ร้านใช้อยู่ ("เท่าวันเดียวกันสัปดาห์ก่อน") โมเดลคลาดเคลื่อนน้อยลงประมาณหนึ่งในสาม และเมื่อแปลงเป็นจำนวนที่ควรเตรียมแบบ newsvendor ทำให้ทั้งของขาดและของเหลือทิ้งลดลง ระบบตอบเร็วกว่า SLO ประมาณ 10 เท่า
+**สรุป:** เมื่อเทียบกับวิธีที่ร้านใช้อยู่ ("เท่าวันเดียวกันสัปดาห์ก่อน") โมเดลคลาดเคลื่อนน้อยลงประมาณหนึ่งในสาม ตัวชี้วัดของขาด (stockout proxy) ลดลงประมาณ 31% และของเหลือทิ้ง (waste proxy) ลดลงประมาณ 36% ระบบตอบเร็วกว่า SLO ประมาณ 10 เท่า และเมื่อข้อมูลเปลี่ยน (data drift / concept drift) ระบบตรวจพบและแยกแยะได้ตามเกณฑ์ใน §7
 
-> **หมายเหตุความสอดคล้องของตัวเลข:** ตารางใน §4 (M3) ได้ WAPE naive 36.8% / LightGBM 27.1% ซึ่งต่างจาก §5 (M4) เพราะรันคนละรอบข้อมูล ตัวเลข WAPE ในตารางนี้ใช้ของ §5 ซึ่งรันผ่าน `ingest` ของ M2 กับข้อมูล Kaggle จริง ส่วน stockout/waste proxy ยังเป็นของ §4 — **M3 ควรรัน `train.py` ใหม่บนข้อมูลเดียวกันแล้วอัปเดต §4** ให้ตัวเลขตรงกันก่อน release
+> ตัวเลข WAPE / stockout / waste ในตารางนี้ตรงกับ §4 (M3) และ §5 (M4) — ทั้งสอง section รันบนข้อมูลชุดเดียวกัน (ผ่าน `ingest` ของ M2)
 
 ### ข้อจำกัดและงานในอนาคต
 - **ข้อมูลจากร้านเดียว ช่วง 2021–2022** — โมเดลอาจใช้กับร้านอื่นหรือช่วงเวลาอื่นไม่ได้ทันที ต้องเทรนใหม่ด้วยข้อมูลของร้านนั้น
@@ -680,10 +682,10 @@ docker build -t bakery-api .
 | §2 Data | Claude Code | เขียน `ingest.py`, `validate.py`, `split_from_config()`, `tests/test_data.py` และร่าง §2 | M2 — ตรวจด้วย ruff + pytest และรันกับไฟล์ดี/เสีย |
 | §3–§4 Features & Model | AI (ไม่ระบุเครื่องมือ) | วางแนวทาง feature, ตรวจ data leakage, ออกแบบ test, โค้ด train + MLflow tracking และจัดทำรายงาน | M3 — ตรวจผลการรันและผล test ก่อนใช้ |
 | §5–§6 Registry & Serving | Claude Code | เขียน `evaluate_gate.py`, `registry.py`, `api/*`, test, locustfile, docker-compose และร่าง §5–§6 | M4 — รัน pytest, ยิง API ทุก endpoint, ทดสอบ promote/rollback และ Locust |
-| §7 Monitoring | (รอ M5) | | M5 |
-| §8 Pipeline DAG | (รอ M2) | | M2 |
-| §9 CI/CD | (รอ M5) | | M5 |
+| §7 Monitoring & Drift | Claude | เขียน `monitor.py`, `simulate_drift.py`, `test_monitor.py`, alert rules, Grafana dashboard และร่าง §7 | M5 — รัน pytest/ruff, `promtool check`, รัน API + Prometheus จริงแล้วทำให้ alert firing |
+| §8 Pipeline DAG | Claude Code | เขียน `flow.py`, `tests/test_flow.py` และร่าง §8 | M2 — รัน ruff/pytest และรัน flow จริงทั้งกรณีผ่านและข้อมูลเสีย |
+| §9 CI/CD | Claude | เขียน `ci.yml`, `make_ci_data.py`, ออกแบบ demo FAIL และร่าง §9 | M5 — รัน model-gate ในเครื่อง ดู run จริงบน GitHub Actions ทั้ง PASS และ FAIL |
 
-**สรุป:** ทุกคนที่ส่งงานแล้วใช้ AI ช่วยเขียนโค้ดและร่างรายงาน และทุกคนตรวจสอบด้วยการรัน test / รันกับข้อมูลจริงก่อน merge — การตัดสินใจหลัก (metric, เกณฑ์ gate, การเลือกโมเดล, วิธีแก้ปัญหาเช่น p95 240 ms → 19 ms ใน §6) ผู้รับผิดชอบแต่ละส่วนเป็นผู้ตรวจและยืนยัน พร้อมเขียนเหตุผลไว้ใน section ของตัวเอง
+**สรุป:** ทุกคนใช้ AI (Claude / Claude Code) ช่วยเขียนโค้ดและร่างรายงาน และทุกคนตรวจสอบด้วยการรัน test / รันกับข้อมูลจริงก่อน merge — การตัดสินใจหลัก (metric, เกณฑ์ gate, การเลือกโมเดล, วิธีแก้ปัญหาเช่น p95 240 ms → 19 ms ใน §6) ผู้รับผิดชอบแต่ละส่วนเป็นผู้ตรวจและยืนยัน พร้อมเขียนเหตุผลไว้ใน section ของตัวเอง
 
 **หลักการที่ทีมใช้:** AI ช่วยร่างโค้ด/เอกสารได้ แต่เจ้าของงานต้องอ่านทุกบรรทัด รันทดสอบเอง และอธิบายได้ตอนนำเสนอ (CLAUDE.md §1 ข้อ 6)
