@@ -95,6 +95,7 @@ jobs:
       - name: Train (4 experiments → MLflow)
         run: python -m src.train
       - name: Model quality gate (ต้องผ่าน)
+        shell: bash          # bash ของ Actions = -eo pipefail → exit code ของ gate ไม่หายไปกับ tee
         run: python -m src.evaluate_gate | tee gate.txt
       - name: Gate summary
         if: always()
