@@ -36,7 +36,12 @@ def make(cfg: dict) -> pd.DataFrame:
     base = np.geomspace(150, 8, len(articles))
     season = np.where(dates.month.isin([7, 8]), 1.4, 1.0) * WEEKDAY[dates.dayofweek]
     lam = np.outer(season, base)                                  # วัน × สินค้า
-    qty = rng.poisson(lam)
+    # DEMO FAIL: ยอดวันนี้ = ยอดวันเดียวกันสัปดาห์ก่อน + noise (random walk รายสัปดาห์)
+    # → seasonal-naive คือคำตอบที่ดีที่สุดอยู่แล้ว โมเดลชนะ rule ไม่ถึง 10% → gate ต้อง REJECT
+    qty = np.round(lam).astype(float)
+    for t in range(7, len(dates)):
+        qty[t] = np.maximum(0, qty[t - 7] + rng.normal(0, 0.15 * base))
+    qty = np.round(qty)
     return pd.DataFrame({
         "date": np.repeat(dates.strftime("%Y-%m-%d"), len(articles)),
         "article": np.tile(articles, len(dates)),
