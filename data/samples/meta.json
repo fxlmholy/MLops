@@ -1,0 +1,6 @@
+{
+  "data_version": "samples",
+  "known_items": ["CROISSANT", "TRADITIONAL BAGUETTE"],
+  "train_stats": {"mean": 78.5, "std": 35.0, "max": 150.0},
+  "note": "meta สำหรับไฟล์ตัวอย่างใน data/samples เท่านั้น — ข้อมูลจริงใช้ data/processed/meta.json ที่ src.ingest สร้าง"
+}

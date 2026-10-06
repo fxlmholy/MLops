@@ -1,25 +1,42 @@
 # P5 (M4): docker compose up -d --build
+#   mlflow  :5000  tracking + model registry (เก็บข้อมูลใน ./mlflow_data)
+#   api     :8000  FastAPI โหลด champion จาก mlflow + อ่านประวัติยอดขายจาก ./data/processed
+#   prometheus :9090 / grafana :3000  (dashboard = งาน P6)
 services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.17.2
     command: mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow/mlflow.db --artifacts-destination /mlflow/artifacts
     ports: ["5000:5000"]
     volumes: ["./mlflow_data:/mlflow"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   api:
     build: .
     ports: ["8000:8000"]
     environment:
       MLFLOW_TRACKING_URI: http://mlflow:5000
-    depends_on: [mlflow]
+    volumes: ["./data/processed:/app/data/processed:ro"]   # ประวัติยอดขายสำหรับสร้าง feature
+    depends_on:
+      mlflow: { condition: service_healthy }
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:v2.54.1
     ports: ["9090:9090"]
-    volumes: ["./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro   # P6: alert p95/error/down
     depends_on: [api]
 
-  grafana:
+  grafana:                # P6 (M5): datasource + dashboard โหลดอัตโนมัติ (admin/admin)
     image: grafana/grafana:11.2.2
     ports: ["3000:3000"]
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on: [prometheus]

@@ -4,6 +4,8 @@ seed: 42
 paths:
   raw: data/raw/Bakery sales.csv
   processed: data/processed/daily_sales.parquet
+  meta: data/processed/meta.json          # P2: data version + known_items + สถิติ train (ingest สร้าง)
+  samples_meta: data/samples/meta.json    # P2: meta ของไฟล์ตัวอย่าง ใช้ใน CI / เครื่องที่ยังไม่มีข้อมูลจริง
   samples_good: data/samples/good_sales.csv
   samples_bad: data/samples/bad_sales.csv
 
@@ -23,18 +25,36 @@ features:
 model:
   quantile_default: 0.6    # ใช้เมื่อไม่ส่งราคา/ต้นทุนมา
 
+metrics:                   # P1/M1 — ตัวชี้วัดของโมเดล
+  optimizing: wape         # เลือกโมเดลจาก WAPE ต่ำสุด
+  secondary: [pinball, mae]
+  baseline: seasonal_naive # rule ที่ต้องชนะ: ยอด = วันเดียวกันสัปดาห์ก่อน (lag 7)
+  business: [stockout_rate, waste_rate, lost_profit_per_day]  # simulate บน test set
+
 gate:                      # Gating metrics — ต้องผ่านทุกข้อจึง promote
   min_improvement_vs_naive: 0.10   # WAPE ต้องดีกว่า seasonal-naive >= 10%
   max_model_size_mb: 50
+  max_p95_latency_ms: 200          # P1/M1
+  require_schema_pass: true        # P1/M1 — ข้อมูลต้องผ่าน Pandera schema
 
 slo:
   p95_latency_ms: 200
   error_rate: 0.01
   availability: 0.99
+  batch_deadline: "06:00"   # P1/M1 — batch พยากรณ์ต้องเสร็จก่อนเริ่มอบ
 
 monitoring:
   psi_threshold: 0.2              # data drift
   wape_degradation_ratio: 1.2     # concept drift: WAPE_7d > 1.2 x WAPE ตอน deploy
+  wape_window_days: 7             # P6/M5: rolling window ของ WAPE
+  wape_baseline: max              # P6/M5: WAPE ตอน deploy = max(WAPE validation, WAPE 7 วันแรกหลัง deploy)
+  drift_window_days: 14           # P6/M5: data drift เทียบ N วันล่าสุดกับช่วง train
+  retrain_every_days: 7           # P6/M5: retrain ตาม schedule ทุกสัปดาห์ (หรือเมื่อมี alert)
+  drift_start_offset_days: 7      # P6/M5: จำลอง drift เริ่มหลังเริ่มช่วง test 7 วัน
+  data_drift_factor: 2.0          # P6/M5: สินค้าครึ่งหนึ่ง x2 อีกครึ่ง /2 (product mix เปลี่ยน)
+  concept_drift_factor: 0.6       # P6/M5: ยอดจริง x0.6 (คู่แข่งเปิดร้าน)
+  prometheus_url: http://localhost:9090
+  api_url: http://localhost:8000
 
 mlflow:
   tracking_uri: http://localhost:5000
