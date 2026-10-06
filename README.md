@@ -1,5 +1,7 @@
 # 🥖 Bakery Daily Demand Prediction — CP413008 MLOps Project
 
+[![CI](https://github.com/fxlmholy/MLops/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/fxlmholy/MLops/actions/workflows/ci.yml)
+
 พยากรณ์ยอดขายรายสินค้าของวันพรุ่งนี้ และแนะนำจำนวนที่ควรเตรียม (Newsvendor) สำหรับร้านเบเกอรี่
 
 > คู่มือทีม: [`CLAUDE.md`](CLAUDE.md) · รายงาน: [`report.md`](report.md)

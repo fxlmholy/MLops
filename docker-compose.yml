@@ -28,10 +28,15 @@ services:
   prometheus:
     image: prom/prometheus:v2.54.1
     ports: ["9090:9090"]
-    volumes: ["./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro   # P6: alert p95/error/down
     depends_on: [api]
 
-  grafana:
+  grafana:                # P6 (M5): datasource + dashboard โหลดอัตโนมัติ (admin/admin)
     image: grafana/grafana:11.2.2
     ports: ["3000:3000"]
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on: [prometheus]

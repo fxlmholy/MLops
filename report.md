@@ -12,9 +12,9 @@
 | 4 | Model Development & Experiment Tracking | M3 | ⬜ |
 | 5 | Model Registry, Gate & Rollback | M4 | ✅ |
 | 6 | Serving, Infrastructure & Load Test | M4 | ✅ |
-| 7 | Monitoring, Drift & Retraining | M5 | ⬜ |
-| 8 | Pipeline DAG | M2 | ⬜ |
-| 9 | CI/CD | M5 | ⬜ |
+| 7 | Monitoring, Drift & Retraining | M5 | 🟨 |
+| 8 | Pipeline DAG | M2 | 🟨 |
+| 9 | CI/CD | M5 | 🟨 |
 | 10 | Architecture, Reproducibility & สรุป | M1 | 🟨 |
 | 11 | สรุปการใช้ AI (รวมจากทุก section) | M1 | 🟨 |
 
@@ -26,7 +26,7 @@
 | รหัส | ชื่อ-สกุล | รหัสนักศึกษา | GitHub | บทบาท |
 |---|---|---|---|---|
 | M1 | | 67xxxxxxxx | @nattapongsric-collab | Project Lead / Framing / Report |
-| M2 | | 67xxxxxxxx | NongPP235 | Data Engineer |
+| M2 | | 673380633-5 | NongPP235 | Data Engineer |
 | M3 | | | | ML Engineer |
 | M4 | จิตติพัฒน์ มูลศรี | 673380437-5 | @fxlmholy | Serving Engineer |
 | M5 | ธนโชติ กมลเลิศ|673380630-1 |thanachotkam-hue | Ops Engineer |
@@ -173,19 +173,17 @@ conda run -n mlops-m3 python -m pytest tests/test_features.py -v
 ### สิ่งที่ทำ พัฒนา src/train.py สำหรับเตรียมข้อมูลยอดขายรายวัน สร้าง Features ฝึกโมเดล 4 แบบ และบันทึกผลการทดลองด้วย MLflow ได้แก่ Seasonal-naive, Linear Regression, LightGBM default และ LightGBM tuned โดยบันทึกพารามิเตอร์ ตัวชี้วัด รุ่นโค้ด ค่า SHA256 ของ Dataset เวอร์ชัน Python ไฟล์ requirements.txt รายการ Features โมเดล กราฟ Actual vs Predicted และผลวิเคราะห์ SHAP สำหรับโมเดลที่รองรับ
 ### การตัดสินใจและเหตุผล ใช้ WAPE เป็นตัวชี้วัดหลักสำหรับเปรียบเทียบโมเดลบน Validation set เนื่องจากต้องการประเมินความคลาดเคลื่อนเทียบกับยอดขายจริง เลือกโมเดลจากผล Validation และใช้ Test set สำหรับรายงานผลประเมินขั้นสุดท้ายเท่านั้น
 ### ผลลัพธ์ / หลักฐาน
- Run | โมเดล | Hyperparams | WAPE | MAE | Pinball@q | Stockout | Waste | ผ่าน Gate? |
+| Run | โมเดล | Hyperparams | WAPE | MAE | Pinball@q | Stockout | Waste | ผ่าน Gate? |
 |---|---|---|---:|---:|---:|---:|---:|---|
-| 1 | Seasonal-naive | lag=7 | 0.367764 | 2.508227 | 1.268413 | 1.325612 | 1.182615 | ยังไม่ยืนยัน |
-| 2 | Linear Regression | StandardScaler + LinearRegression | 0.321740 | 2.194328 | 1.096773 | 1.095211 | 1.099117 | ยังไม่ยืนยัน |
-| 3 | LightGBM default | random_state=42 | 0.271485 | 1.851584 | 0.945858 | 1.026123 | 0.825461 | ยังไม่ยืนยัน |
-| 4 | LightGBM tuned | objective=quantile, alpha=0.6, n_estimators=300, learning_rate=0.03, num_leaves=31 | 0.296807 | 2.024280 | 1.047296 | 1.187919 | 0.836361 | ยังไม่ยืนยัน |
+| 1 | Seasonal-naive | lag=7 | 0.288310 | 15.526882 | 7.864516 | 8.268817 | 7.258065 | Baseline |
+| 2 | Linear Regression | StandardScaler + LinearRegression | 0.223397 | 12.031030 | 6.006595 | 5.970913 | 6.060118 | ผ่าน → challenger |
+| 3 | LightGBM default | random_state=42 | 0.191983 | 10.339223 | 5.270141 | 5.672259 | 4.666964 | ผ่าน → v1 champion |
+| 4 | LightGBM tuned + holiday | objective=quantile, alpha=0.6, n_estimators=300, learning_rate=0.03, num_leaves=31 | 0.197349 | 10.628181 | 5.293117 | 5.209222 | 5.418959 | ยังไม่ยืนยัน |
 
   ### ปัญหาที่เจอและวิธีแก้ 
 ปัญหาการติดตามผลการทดลอง: ต้องเปรียบเทียบผลลัพธ์ของโมเดลทั้ง 4 แบบ จึงใช้ MLflow บันทึกพารามิเตอร์ ตัวชี้วัด และ artifacts ของแต่ละการทดลอง เพื่อให้สามารถตรวจสอบและเปรียบเทียบผลได้
 
-ปัญหาการเลือกโมเดล: โมเดลแต่ละแบบให้ผลลัพธ์แตกต่างกัน จึงใช้ค่า WAPE บน Validation Set เป็นเกณฑ์หลักในการเปรียบเทียบ โดย LightGBM Default ให้ค่า WAPE ต่ำที่สุดที่ 0.271485 หรือประมาณ 27.15%
-
-ปัญหาการอธิบายผลโมเดล: ใช้ SHAP วิเคราะห์ความสำคัญของ features เพื่อช่วยอธิบายว่าตัวแปรใดมีผลต่อการพยากรณ์ ทั้งนี้ผลการวิเคราะห์ควรพิจารณาร่วมกับกราฟและไฟล์ SHAP ที่บันทึกไว้ใน MLflow
+ปัญหาการเลือกโมเดล: โมเดลแต่ละแบบให้ผลลัพธ์แตกต่างกัน จึงใช้ค่า WAPE บน Validation Set เป็นเกณฑ์หลักในการเปรียบเทียบ โดย LightGBM Default ให้ค่า WAPE ต่ำที่สุดที่ 0.191983 หรือประมาณ 19.20%
   ### การใช้ AI
   ใช้ AI ช่วยสนับสนุนการพัฒนาโค้ดสำหรับการฝึกโมเดล การบันทึกผลการทดลองด้วย MLflow และการจัดทำรายงาน รวมถึงช่วยตรวจสอบข้อผิดพลาดและปรับปรุงการเปรียบเทียบผลลัพธ์ โดยมีการตรวจสอบผลการรันและผลการทดสอบก่อนนำไปใช้งาน
   ### วิธีรัน/ทดสอบส่วนนี้
@@ -338,45 +336,252 @@ locust -f loadtest/locustfile.py --headless -u 50 -r 10 -t 60s --host http://127
 ---
 
 ## §7 Monitoring, Drift & Retraining
-**ผู้รับผิดชอบ:** M5 · **Reviewer:** M4 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M5 (@thanachotkam-hue) · **Reviewer:** M4 · **PR:** #17 · **วันที่เสร็จ:**
 
 ### สิ่งที่ทำ
+แบ่งการเฝ้าระวังเป็น 3 ชั้น เพราะแต่ละแบบมีสาเหตุและวิธีแก้ต่างกัน
+
+| ชั้น | ดูอะไร | เครื่องมือ | ไฟล์ |
+|---|---|---|---|
+| Data drift: P(X) เปลี่ยน | PSI ของ lag_1 / lag_7 (ปรับเป็นดัชนีรายสินค้า) และสัดส่วนยอดขายรายสินค้า ใน 14 วันล่าสุด เทียบกับช่วง train | PSI ที่เขียนเอง + Evidently `DataDriftPreset(stattest="psi")` (HTML) | `src/monitor.py` |
+| Concept drift: P(y\|X) เปลี่ยน | WAPE ย้อนหลัง 7 วัน เทียบกับ WAPE ตอน deploy (ค่าที่สูงกว่าระหว่าง validation กับ 7 วันแรกหลัง deploy) | rolling WAPE | `src/monitor.py` |
+| System | p95 latency, 5xx error rate, API up, มีโมเดลหรือไม่ | Prometheus + alert rules + Grafana | `monitoring/` |
+
+- `src/simulate_drift.py` จำลองข้อมูล 3 แบบ โดย drift เริ่ม 7 วันหลังเริ่มช่วง test
+  - **normal**: ข้อมูลเดิม
+  - **data_drift**: สินค้าครึ่งหนึ่ง × 2 อีกครึ่ง ÷ 2 (เช่นเปลี่ยนเมนู/จัดโปร) → สัดส่วนสินค้าและ lag feature เลื่อน ส่วนความสัมพันธ์ X→y ยังเหมือนเดิม
+  - **concept_drift**: feature (`qty`) เหมือนเดิมทุกอย่าง แต่ยอดขายจริง (`actual`) × 0.6 (เช่นคู่แข่งเปิดร้าน)
+- `src/monitor.py`
+  - โหลด **champion จาก MLflow Registry** (ถ้าต่อไม่ได้จะใช้ LightGBM default ที่เทรนบนช่วง train แทน)
+  - สร้าง feature ด้วย `build_features` ตัวเดียวกับ train/serve
+  - คำนวณ PSI, WAPE_7d และดึง p95/error rate จาก Prometheus
+  - บันทึก `docs/evidence/p6_<scenario>_summary.json`, กราฟ `docs/evidence/p6_wape_7d.png` และ Evidently HTML ใน `reports/` (gitignored เพราะไฟล์ละ ~3 MB)
+  - Evidently ดู**ค่าเดียวกับที่ใช้ alert**: `lag_1_index`, `lag_7_index` และ `article_sold` (สุ่มชื่อสินค้าถ่วงตามจำนวนชิ้นที่ขาย = product mix)
+  - พิมพ์ตาราง markdown สำหรับวางในรายงาน; เมื่อเฝ้าข้อมูลจริง (`--data`) คืน exit code 1 ถ้ามี alert (ใช้กับ cron ได้)
+- **Retrain loop** (`--retrain`): ถ้า `should_retrain()` คืนค่าจริง (มี alert หรือครบ 7 วันนับจากเทรนครั้งล่าสุด) จะรัน
+  `python -m src.train` (P3) → `python -m src.evaluate_gate` (P4) → `POST /reload` (P5)
+  และบันทึกว่า champion เปลี่ยนหรือไม่ โดยเรียกโค้ดของขั้นอื่นตามเดิม ไม่ได้แก้
+- `monitoring/alert_rules.yml`: `HighP95Latency` (> 200 ms), `HighErrorRate` (5xx > 1%), `ApiDown`, `ModelNotLoaded`
+- Grafana provisioning: datasource + dashboard **"Bakery API — System Health (P6)"** โหลดอัตโนมัติตอน `docker compose up`
+  - แผง: API up, availability 24h, champion version, p95, request rate, p50/p95/p99 พร้อมเส้น SLO, 5xx rate, status code
+- `docker-compose.yml`: แก้เฉพาะ service `prometheus` และ `grafana` เพื่อ mount ไฟล์ข้างบน
+- `configs/config.yaml`: เพิ่ม key ในส่วน `monitoring:` เท่านั้น (window, factor, URL)
+- `tests/test_monitor.py`: 14 tests (PSI, simulate, rolling WAPE, แยก data/concept drift ได้, system SLO, retrain policy) ใช้ข้อมูลสังเคราะห์ ไม่ต้องมี MLflow หรือ Prometheus
+
 ### การตัดสินใจและเหตุผล
+- **แยก data drift กับ concept drift** เพราะต้นเหตุต่างกัน
+  - data drift: input เปลี่ยน อาจยังทำนายดีอยู่ → ตรวจสอบ/เก็บข้อมูลเพิ่ม
+  - concept drift: input ปกติแต่ลูกค้าเปลี่ยนพฤติกรรม → เห็นได้จาก error เท่านั้น ต้อง retrain
+  - เกณฑ์ด้านข้อมูลจึงต้องมีทั้ง PSI และ WAPE
+- **PSI ใช้ lag ที่หารด้วยค่าเฉลี่ยของสินค้านั้นในช่วง train** (ดัชนียอดขาย) เพราะยอดแต่ละสินค้าต่างกันประมาณ 20 เท่า ถ้ารวมดิบ ความต่างระหว่างสินค้าจะกลบการเปลี่ยนจริง (ทดสอบแล้ว: สินค้าครึ่งหนึ่ง × 1.5 ได้ PSI แค่ ~0.05)
+- **ไม่ใช้ lag_14 เป็นเกณฑ์** (ยังดูได้ใน Evidently): ใน 14 วันล่าสุด lag_14 คือยอดของ 2 สัปดาห์ก่อนหน้า ข้อมูลจริงเดือน ก.ย. normal ได้ PSI 0.30 (เตือนผิด) ขณะที่ lag_1 / lag_7 ได้ 0.13 / 0.15
+- **จำลอง data drift ด้วยการเปลี่ยนสัดส่วนสินค้า** (× 2 / ÷ 2) แทนการคูณยอดขึ้นอย่างเดียว: ข้อมูลจริง ก.ย. ยอดต่ำกว่าค่าเฉลี่ยทั้งปีอยู่แล้ว การคูณ 1.5 จึงดึงยอดกลับเข้าใกล้ค่าเฉลี่ย PSI ลดลงเหลือ 0.16 (ต่ำกว่า normal) ไม่ใช่การจำลองที่ดี ส่วนสัดส่วนสินค้าไม่ขึ้นกับฤดูกาล
+- **ไม่ใช้ rolling_mean/rolling_std เป็นเกณฑ์ alert** (ยังดูได้ใน Evidently HTML): ค่าเรียบและต่อเนื่องกันวันต่อวัน ช่วงล่าสุดมีแค่ไม่กี่สัปดาห์ จึงได้ PSI สูงเกินจริง ทดสอบกับข้อมูลที่ไม่เปลี่ยนเลยก็ได้ PSI ~1.0
+- **ไม่ใช้ day_of_week / month / is_holiday** เพราะช่วง current เป็นเดือนเดียว ปฏิทินเลื่อนเสมอโดยไม่ได้แปลว่าผิดปกติ
+- **data drift เทียบ 14 วันล่าสุด** (`drift_window_days`) แทนทั้งช่วง test: ไวต่อการเปลี่ยนล่าสุด และไม่ดึงค่าช่วงหน้าร้อนตอนต้นเดือนมาปน (ข้อมูลสังเคราะห์: ทั้งเดือน 0.29 → 14 วัน 0.05)
+- **WAPE_7d = Σ|y−ŷ| / Σy ใน 7 วัน** ไม่ใช่ค่าเฉลี่ยของ WAPE รายวัน เพื่อไม่ให้วันที่ขายน้อยถ่วงผลเกินจริง; ตัดสิน alert จาก**ค่าล่าสุด**
+- **WAPE ตอน deploy = max(WAPE ช่วง validation, WAPE 7 วันแรกหลัง deploy)** (`monitoring.wape_baseline: max`) เพราะใช้แบบใดแบบหนึ่งอย่างเดียวแล้วเตือนผิด (ทดสอบกับข้อมูลสังเคราะห์)
+  - validation อย่างเดียว: ช่วงนี้คือ ก.ค.–ส.ค. (หน้าร้อน ยอดสูง) error สัมพัทธ์จึงต่ำ พอเทียบกับ ก.ย. ที่ยอดลดลงก็เตือนผิด (normal: 0.129 > 1.2 × 0.107)
+  - 7 วันแรกอย่างเดียว: 1 สัปดาห์มี noise สูง ข้อมูลคงที่ยังได้ WAPE_7d แกว่ง 0.09–0.14 ถ้าสัปดาห์แรกบังเอิญต่ำก็เตือนผิด (0.129 > 1.2 × 0.099)
+  - ใช้ค่าที่สูงกว่า: กันเตือนผิดได้ทั้ง 2 สาเหตุ ส่วน concept drift จริง (ยอด × 0.6 → WAPE ~0.6) ยังจับได้ชัด · summary บันทึกทั้ง `wape_validation` และ `wape_first_week`
+  - ข้อมูลจริงยืนยัน: WAPE_7d ของ normal ช่วง 19–25 ก.ย. ขึ้นไป ~0.34 ถ้าใช้ validation (0.192 → เกณฑ์ 0.23) จะเตือนผิด · ใช้ max ได้ baseline 0.370 (สัปดาห์แรก ก.ย. ยังเป็นช่วงเปลี่ยนจากหน้าร้อน) → เกณฑ์ 0.444
+- **นับเฉพาะ 5xx เป็น error rate**: 422 คือ input ผิดของผู้ใช้ ระบบทำงานถูกแล้ว (§6); query ใช้ `or vector(0)` เพื่อให้ได้ 0 แทน "ไม่มีข้อมูล" เมื่อไม่มี 5xx
+- **retrain ต้องผ่าน gate (§5) ทุกครั้ง**: ถ้าโมเดลใหม่แย่กว่า champion เดิมจะใช้ต่อ จึงตั้งให้ retrain อัตโนมัติได้อย่างปลอดภัย
+
 ### ผลลัพธ์ / หลักฐาน
-| Alert | เกณฑ์ | ผลจากการจำลอง |
+**ข้อมูล Kaggle จริง** (champion v1 = `lightgbm_default`, WAPE validation 0.192) · reference = ช่วง train (2021-01-16 → 2022-06-30) · current = ก.ย. 2022 · data drift ดู 17–30 ก.ย. · drift จำลองเริ่ม 2022-09-08 → [`p6_normal_summary.json`](docs/evidence/p6_normal_summary.json), [`p6_data_drift_summary.json`](docs/evidence/p6_data_drift_summary.json), [`p6_concept_drift_summary.json`](docs/evidence/p6_concept_drift_summary.json)
+
+| Scenario | max PSI (feature) | Data drift | WAPE deploy | WAPE_7d ล่าสุด | Concept drift | Retrain |
+|---|---|---|---|---|---|---|
+| normal | 0.153 (lag_7) | 🟢 ok | 0.370 | 0.182 (เกณฑ์ 0.444) | 🟢 ok | ไม่ |
+| data_drift | 0.435 (article_mix) | 🔴 ALERT | 0.370 | 0.290 (เกณฑ์ 0.444) | 🟢 ok | ใช่ (alert:data_drift) |
+| concept_drift | 0.153 (lag_7) | 🟢 ok | 0.370 | 0.600 (เกณฑ์ 0.444) | 🔴 ALERT | ใช่ (alert:concept_drift) |
+
+- **แยกสองแบบได้ชัด**: data drift → PSI เตือน (สัดส่วนสินค้า 0.435, lag_1 0.30) แต่ WAPE ยังอยู่ใต้เกณฑ์ · concept drift → WAPE_7d พุ่งถึง 0.91 (เตือนตั้งแต่ 12 ก.ย. = 4 วันหลัง drift เริ่ม) แต่ PSI เท่ากับ normal เพราะ input ไม่เปลี่ยน
+- Evidently (ค่าเดียวกับที่ใช้ alert, PSI): data_drift ตรวจพบ 3/3 คอลัมน์ → *Dataset Drift is detected* · normal และ concept_drift 1/3 → ไม่ถือว่า dataset drift (Evidently แบ่ง bin ต่างจากของเรา `lag_1_index` จึงได้ 0.22 แทน 0.13)
+
+| Alert | เกณฑ์ | ผล |
 |---|---|---|
-| Data Drift | PSI > 0.2 | |
-| Concept Drift | WAPE_7d > 1.2 × baseline | |
-| Latency | p95 > 200 ms | |
-| Error rate | > 1% | |
+| Data Drift | PSI > 0.2 | data_drift: 🔴 0.435 · normal/concept: 🟢 0.153 |
+| Concept Drift | WAPE_7d > 1.2 × WAPE deploy | concept_drift: 🔴 0.600 > 0.444 · normal: 🟢 0.182 |
+| Latency | p95 > 200 ms | 🟢 p95 = 4.9 ms (Locust 20 users 90 วินาที, 5,883 requests, 0 failures) |
+| Error rate | 5xx > 1% | 🟢 0% ตอนปกติ · 🔴 สาธิต: ให้ API ไม่มีโมเดล → predict ตอบ 503 → `HighErrorRate` + `ModelNotLoaded` = **firing** |
+
+![WAPE_7d](docs/evidence/p6_wape_7d.png)
+
+![Evidently data drift](docs/evidence/p6_evidently.png)
+
+![Prometheus alerts](docs/evidence/p6_alerts.png)
+
+- **Retrain demo** (`--scenario concept_drift --retrain`) → [`p6_retrain_demo.json`](docs/evidence/p6_retrain_demo.json): concept drift alert → `src.train` ✅ → `src.evaluate_gate` ✅ ผ่าน gate (WAPE 0.192 vs naive 0.288) → **v2 = challenger** เพราะไม่ดีกว่า v1 → `/reload` → API ยังใช้ v1
+- Grafana: http://localhost:3000 (admin/admin) → Bakery MLOps → *Bakery API — System Health (P6)* <!-- TODO(M5): แคปหลัง docker compose up + locust → docs/evidence/p6_grafana.png -->
+- ตัวเลขทั้งหมดรันในเครื่องด้วย MLflow server + uvicorn + Prometheus (ไม่ใช่ docker compose) ใช้โค้ดและ config ชุดเดียวกัน
 
 ### ปัญหาที่เจอและวิธีแก้
+- PSI ของ rolling feature เตือนผิดแม้ข้อมูลไม่เปลี่ยน → ใช้เฉพาะ lag ที่ปรับเป็นดัชนีรายสินค้าเป็นเกณฑ์
+- PSI ของ lag ดิบไม่เห็น drift เพราะความต่างระหว่างสินค้ากลบไว้ → หารด้วยค่าเฉลี่ยรายสินค้าในช่วง train
+- ช่วงต้นเดือนหลังหน้าร้อน lag_14 ยังเป็นค่าช่วงปลายเดือนก่อน → ใช้ 14 วันล่าสุดสำหรับ data drift และตัด lag_14 ออกจากเกณฑ์
+- รันข้อมูลจริงครั้งแรก: normal เตือน data drift (lag_14 = 0.30) และ data_drift (× 1.5) ได้ PSI แค่ 0.16 → ตัด lag_14 และเปลี่ยนการจำลองเป็น product mix (ดูเหตุผลด้านบน)
+- Evidently รอบแรกดู feature ดิบ (คนละค่ากับที่ใช้ alert) → รายงานบอกว่า *ไม่* drift ขณะที่ระบบเตือน → เปลี่ยนให้ Evidently ดูดัชนียอดขายและ product mix เหมือนกัน
+- baseline WAPE แบบเดียวเตือน concept drift ผิดใน scenario normal (ดูเหตุผลด้านบน) → ใช้ max ของ validation กับ 7 วันแรกหลัง deploy
+- **ข้อจำกัดที่ยังเหลือ**: PSI เทียบกับช่วง train ทั้งปี ถ้าข้อมูลมีฤดูกาลแรง ระดับยอดของเดือนที่เฝ้าดูต่างจากค่าเฉลี่ยทั้งปีได้ PSI อาจเกิน 0.2 แม้ใน scenario normal (ข้อมูลจริง ก.ย. normal = 0.153 ยังไม่เกิน แต่เดือนอื่นอาจเกิน) → data drift alert จึงแปลว่า "input ต่างจากที่โมเดลเคยเห็น ควรตรวจสอบ" ไม่ได้แปลว่าโมเดลพังเสมอ ต้องดูคู่กับ concept drift
+- `sum(rate(...{status=~"5.."}))` ไม่คืนค่าเมื่อไม่มี 5xx เลย (error rate กลายเป็น "ไม่มีข้อมูล") → เติม `or vector(0)`
+- data drift ทำให้ WAPE สูงขึ้นด้วยช่วงหนึ่ง เพราะ lag ต้องใช้เวลาไล่ตามระดับยอดใหม่ ซึ่งเป็นพฤติกรรมจริงของ data drift (input เปลี่ยนก็กระทบ performance ได้) ข้อสังเกตคือ concept drift ทำให้ WAPE พุ่ง**โดยที่ PSI ปกติ** ใช้ข้อนี้แยกสองแบบออกจากกัน
+- **ข้อจำกัดของ retrain demo**: `train.py` ใช้ข้อมูล `data/processed` และ split ใน config ตายตัว ข้อมูลจำลอง drift จึงไม่ได้เข้าไปในการเทรน; ในการใช้งานจริง ingest จะดึงยอดขายใหม่เข้ามาก่อน retrain แล้วจึงเลื่อนช่วง split ตาม เดโมนี้จึงแสดงวงจร ตรวจพบ → trigger → โมเดลใหม่ → gate → registry และแสดงว่า gate กันไม่ให้โมเดลที่ไม่ดีขึ้นขึ้นเป็น champion
+
 ### การใช้ AI
+- ใช้ Claude ช่วยเขียน `src/monitor.py`, `src/simulate_drift.py`, `tests/test_monitor.py`, alert rules, Grafana dashboard และร่างรายงานส่วนนี้
+- ตรวจสอบโดย:
+  - รัน pytest และ ruff
+  - `promtool check rules/config`
+  - รัน API + Prometheus จริงแล้วทำให้ API ไม่มีโมเดล → `HighErrorRate` และ `ModelNotLoaded` เปลี่ยนเป็น firing และ `check_system()` อ่าน p95/error rate ได้ตรง
+  - รันกับข้อมูล Kaggle จริงครบทุกขั้น (ingest → train → gate → monitor 3 scenario → retrain → alert) และเทียบตัวเลขกับ §5 (WAPE 0.192 / naive 0.288 ตรงกัน)
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+pytest -q tests/test_monitor.py
+docker compose up -d --build                      # mlflow, api, prometheus (+alert rules), grafana (+dashboard)
+python -m src.simulate_drift                      # → data/processed/drift/{normal,data_drift,concept_drift}.parquet
+python -m src.monitor                             # ทั้ง 3 scenario → ตาราง + json + png + Evidently html
+python -m src.monitor --scenario concept_drift --retrain   # สาธิต ตรวจพบ → train → gate → registry → reload
+python -m src.monitor --data <ยอดขายใหม่.parquet>          # ใช้กับข้อมูลจริงที่เข้ามาใหม่
+# Prometheus alerts: http://localhost:9090/alerts · Grafana: http://localhost:3000 (admin/admin)
+```
 
 ---
 
 ## §8 Pipeline DAG
-**ผู้รับผิดชอบ:** M2 · **Reviewer:** M1 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M2 (@NongPP235) · **Reviewer:** M1 (@nattapongsric-collab) · **PR:** #20 · **วันที่เสร็จ:** 2026-10-06
 
 ### สิ่งที่ทำ
+- `src/flow.py` — Prefect 2 flow `bakery-demand-pipeline` 7 task เรียงเป็น DAG:
+  `ingest → validate → split → train → evaluate_gate → register → batch_predict`
+  - **ingest**: `src.ingest.run()` raw csv → `data/processed/daily_sales.parquet` + `meta.json` (data version = SHA256)
+  - **validate**: Pandera schema ของ P2 — ไม่ผ่าน → `alert()` (log ERROR + `logs/validation_alerts.log`) แล้ว raise → **flow หยุด ไม่ train ต่อ**
+  - **split**: ตรวจว่าวันที่ใน config แบ่งได้ครบ train/val/test และ log ช่วงวันที่ (train.py แบ่งด้วยวันที่ชุดเดียวกัน)
+  - **train**: `src.train.main()` ของ M3 (4 โมเดล + MLflow ครบ 6 อย่าง)
+  - **evaluate_gate**: `src.evaluate_gate.evaluate()` ของ M4 — ไม่ผ่าน gate → raise → flow หยุด
+  - **register**: สรุปสถานะ registry (champion/challenger) + `POST /reload` ให้ API โหลด champion ใหม่ (API ไม่เปิด = เตือนแล้วไปต่อ)
+  - **batch_predict**: champion พยากรณ์ "พรุ่งนี้" ทุกสินค้า → `data/processed/predictions/<date>.csv`
+- รันคำสั่งเดียว `make pipeline` (= `python -m src.flow`), สาธิตไฟล์เสีย `python -m src.flow --data data/samples/bad_sales.csv`, ตั้งเวลาทุกคืน `python -m src.flow --serve` (cron 02:00)
+- `tests/test_flow.py` 4 tests: ไฟล์เสีย → flow ล้ม + มี alert, ไฟล์ดีผ่าน, exit code = 1, และ **validate ล้ม → train/gate ไม่ถูกเรียก**
+- pin `anyio==4.6.2` ใน `requirements.txt` เพราะ anyio รุ่นใหม่ทำให้ Prefect 2.20 crash (`GatherTaskGroup`)
+
 ### การตัดสินใจและเหตุผล
+- **task เรียกฟังก์ชันของเจ้าของขั้นตรง ๆ** (ไม่เขียน logic ซ้ำใน flow) → แก้ที่โมดูลเดียว flow ได้ผลตามทันที และแต่ละคนอธิบายส่วนตัวเองได้
+- **หยุดด้วยการ raise** แทนการเช็ก if/else ในทุกขั้น: Prefect ไม่เรียก task ถัดไปเมื่อ task ก่อนหน้า Failed, flow จบสถานะ Failed และ `main()` คืน exit code 1 ให้ CI / scheduler รู้
+- **gate ไม่ผ่าน = หยุดก่อน batch_predict** (ทางเลือก: ใช้ champion เดิมพยากรณ์ต่อ) เลือกหยุดให้ตรงกับ exit code ของ `evaluate_gate` — champion เดิมยังตอบ API ได้ และสั่ง batch เองได้ด้วย `python -m api.model_service`
+- **`--data` โหมดตรวจไฟล์**: ไฟล์ใน `data/samples/` เล็กเกินจะ train จึงหยุดหลัง validate — ใช้สาธิตข้อมูลเสียหน้าห้องได้โดยไม่แตะข้อมูลจริง
+- **รันทุกคืน 02:00** (`flow.serve`, cron) → flow ทั้งหมดใช้เวลา < 1 นาที เสร็จก่อน 06:00 ตาม SLO ของ batch
+- **Prefect แทน Airflow**: Python ล้วน รันบน Windows ได้ (ตาม CLAUDE.md §2)
+
 ### ผลลัพธ์ / หลักฐาน
+รัน `python -m src.flow` กับ MLflow server (ทดสอบบนข้อมูลจำลองรูปแบบเดียวกับ Kaggle — **ต้องรันซ้ำด้วยข้อมูลจริงแล้วแทนตัวเลข**):
+
+| task | ผล |
+|---|---|
+| ingest | 9,555 แถว, 15 สินค้า, data_version `ca4bd66a8bb5` |
+| validate | ผ่าน 9,555 แถว |
+| split | train 2021-01-02→2022-06-30 (8,175) · val →2022-08-31 (930) · test →2022-09-30 (450) |
+| train + evaluate_gate | lightgbm_default WAPE 0.156 vs naive 0.212 → ผ่าน → v1 champion (รอบสอง: v2 ไม่ชนะ v1 → ค้าง challenger) |
+| batch_predict | 15 สินค้า วันที่ 2022-10-01 → `data/processed/predictions/2022-10-01.csv` |
+| เวลาทั้ง flow | ~27 วินาที · สถานะ `Completed` · exit 0 |
+
+ข้อมูลเสีย:
+```
+$ python -m src.flow --data data/samples/bad_sales.csv
+ERROR | validate - VALIDATION FAILED ใน pipeline — พบ 12 จุดผิด → หยุด flow
+Flow run ... Finished in state Failed(...)
+[flow] ❌ pipeline หยุดที่ validate: พบ 12 จุดผิด (ไม่ train ต่อ) ดู logs/validation_alerts.log   (exit code 1)
+```
+- `ruff check .` ผ่าน · `pytest` ผ่าน 49/49 (รวม `tests/test_flow.py` 4 tests)
+
+> TODO: รันด้วยข้อมูล Kaggle จริง + แคป screenshot DAG / flow run ใน Prefect UI (`prefect server start` → http://localhost:4200) ใส่ `docs/evidence/p7_prefect_dag.png`
+
 ### ปัญหาที่เจอและวิธีแก้
+- `TypeError: Can't instantiate abstract class GatherTaskGroup` ทุกครั้งที่รัน flow → pip ติดตั้ง anyio รุ่นล่าสุดซึ่ง Prefect 2.20 ใช้ไม่ได้ → pin `anyio==4.6.2`
+- `train.py` ใช้ `mlflow.tracking_uri` จาก config (ไม่อ่าน env `MLFLOW_TRACKING_URI`) → ต้องเปิด MLflow ที่ `localhost:5000` ก่อนรัน flow (`docker compose up -d mlflow`)
+
 ### การใช้ AI
+- ใช้ Claude (Claude Code) ช่วยเขียน `src/flow.py`, `tests/test_flow.py` และร่าง section นี้; ตรวจสอบโดยรัน `ruff`, `pytest` และรัน flow จริงทั้งกรณีผ่านและกรณีข้อมูลเสีย
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+docker compose up -d mlflow                                # MLflow :5000
+python -m src.flow                                         # หรือ make pipeline (raw → serving)
+python -m src.flow --data data/samples/bad_sales.csv       # ข้อมูลเสีย → หยุดที่ validate, exit 1
+pytest tests/test_flow.py -v
+prefect server start                                       # (ไม่บังคับ) ดู DAG ที่ http://localhost:4200
+```
 
 ---
 
 ## §9 CI/CD
-**ผู้รับผิดชอบ:** M5 · **Reviewer:** M4 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M5 (@thanachotkam-hue) · **Reviewer:** M4 · **PR:** #18 · **วันที่เสร็จ:**
 
 ### สิ่งที่ทำ
+`.github/workflows/ci.yml` รันทุก PR และทุก push เข้า `dev`/`main` · badge อยู่บน README
+
+```
+code-quality ──► data-validation ──► model-gate
+      └────────► docker (CD)
+```
+
+| Job | ตรวจอะไร | ล้มเมื่อ |
+|---|---|---|
+| 1. **code-quality** | `ruff check .` + `pytest` (unit/data/api/registry/monitor) | lint ผิด หรือ test ใด test หนึ่งไม่ผ่าน |
+| 2. **data-validation** | Pandera schema (`src.validate`) กับ `data/samples/`: `good_sales.csv` ต้องผ่าน และ `bad_sales.csv` **ต้องถูกจับ** (exit ≠ 0) | ไฟล์ดีไม่ผ่าน หรือไฟล์เสียหลุดผ่าน schema |
+| 3. **model-gate** | เปิด MLflow (file store) → สร้างข้อมูล CI → ตรวจ schema → `src.train` (4 การทดลอง) → `src.evaluate_gate` | WAPE ดีกว่า seasonal-naive ไม่ถึง 10% หรือโมเดล ≥ 50 MB |
+| 4. **docker** (CD) | build image API จาก `Dockerfile` ทุก PR; push `ghcr.io/fxlmholy/mlops/bakery-api:{sha, dev/latest}` เมื่อ merge เข้า dev/main | build ไม่ผ่าน |
+
+- `.github/scripts/make_ci_data.py`: สร้างข้อมูลยอดขายสังเคราะห์ (15 สินค้า, 2021-01-02 → 2022-09-30, seed 42) ในรูปแบบเดียวกับผลของ `src.ingest` ให้ train และ gate รันได้ใน CI
+- ผล gate แสดงใน **Job summary** ของแต่ละ run · log การแจ้งเตือนของ validation อัปโหลดเป็น artifact `validation-alerts`
+- `concurrency`: push ใหม่ใน PR เดิมจะยกเลิก run เก่า · ทุก job มี `timeout-minutes`
+
 ### การตัดสินใจและเหตุผล
+- **เรียง job เป็นลำดับ** (code → data → model) เพราะถ้าโค้ดหรือ schema พัง การเทรนโมเดลต่อก็เสียเวลาเปล่า; docker แยกไปขนานหลัง code-quality เพราะไม่ขึ้นกับข้อมูล
+- **ใช้ข้อมูลสังเคราะห์ใน CI แทนข้อมูลจริง**: ข้อมูล Kaggle ไม่ได้ commit ลง repo (ไฟล์ใหญ่ + license ตามกฎทีมข้อ 4) และ Actions ดาวน์โหลด Kaggle ไม่ได้ถ้าไม่มี API key
+  - ข้อมูลมี pattern วันในสัปดาห์และฤดูร้อน + noise แบบ Poisson ถ้าโค้ด feature หรือ train พัง โมเดลจะชนะ seasonal-naive ไม่ถึงเกณฑ์ → CI แดง
+  - ข้อจำกัด: CI พิสูจน์ว่า pipeline และ gate ทำงานถูก ไม่ได้พิสูจน์คุณภาพบนข้อมูลจริง ตัวเลขข้อมูลจริงอยู่ใน §4–§5
+- **ใช้ `src.train` และ `src.evaluate_gate` ตัวจริง** (ไม่เขียน gate แยกสำหรับ CI) → เกณฑ์เดียวกับที่ใช้ promote โมเดลจริง (`configs/config.yaml → gate`)
+- **MLflow แบบ file store** ใน runner: ไม่ต้องพึ่ง sqlite/SQLAlchemy (ปัญหาที่เจอใน §5) และไม่ต้องใช้ service container
+- **push image เฉพาะตอน merge** (event `push`) ไม่ push ตอน PR เพื่อไม่ให้ image ของโค้ดที่ยังไม่ผ่าน review ไปอยู่ใน registry
+
 ### ผลลัพธ์ / หลักฐาน (ต้องมีทั้ง PASS และ FAIL)
+| Run | สิ่งที่ทำ | ผล | หลักฐาน |
+|---|---|---|---|
+| PASS | PR #18 (P8) | ✅ ทั้ง 4 job ผ่าน · gate: LightGBM WAPE 0.106 vs naive 0.129 (ดีกว่า 18%) | [run](https://github.com/fxlmholy/MLops/actions/runs/37453026100) · `docs/evidence/p8_ci_runs.md` |
+| FAIL 1 | PR #19 (demo): ตั้ง `min_improvement_vs_naive` = 0.50 | ❌ **code-quality** ล้ม: `test_registry_gate.py` 2 tests จับได้ว่าเกณฑ์ gate ถูกแก้ · job ถัดไปถูกข้าม | [run](https://github.com/fxlmholy/MLops/actions/runs/37453032360) |
+| FAIL 2 | PR #19 (demo): ข้อมูลที่ seasonal-naive ดีที่สุดอยู่แล้ว (ยอดวันนี้ = วันเดียวกันสัปดาห์ก่อน + noise) | ❌ **model-gate** ล้ม: `WAPE 0.083 > 0.074 (ต้องดีกว่า seasonal-naive 10%)` → ไม่ลงทะเบียนโมเดล | [run](https://github.com/fxlmholy/MLops/actions/runs/37454700982) |
+
+<!-- TODO(M5): แคปหน้าจอแท็บ Actions/Checks ของ PR #18 (เขียว) และ PR #19 (แดง) → docs/evidence/p8_ci_pass.png, p8_ci_fail.png -->
+
 ### ปัญหาที่เจอและวิธีแก้
+- **gate ไม่ผ่านแต่ CI ยังเขียว**: step `python -m src.evaluate_gate | tee gate.txt` ใช้ exit code ของ `tee` (เป็น 0 เสมอ) เพราะ shell เริ่มต้นของ Actions ไม่เปิด `pipefail`
+  - เจอจากการทำ FAIL demo ครั้งแรก
+  - แก้โดยใส่ `shell: bash` (= `bash -eo pipefail`) → gate ล้มจริงตามที่ควร
+- demo ครั้งแรก (ตั้ง threshold 50%) ไม่ถึง job model-gate เพราะ unit test ของ §5 อ่านค่าจาก config แล้วล้มก่อน → เป็นผลดี (แก้เกณฑ์ gate แบบเงียบ ๆ ไม่ได้) แต่ถ้าจะสาธิต gate โดยตรงต้องเปลี่ยนที่ข้อมูลแทน จึงทำ FAIL 2
+- ข้อมูลไม่มี noise เลย → WAPE ของทั้งโมเดลและ naive ≈ 0 แล้ว gate แสดง `0.000 > 0.000` อ่านไม่รู้เรื่อง → ใช้ random walk รายสัปดาห์ ซึ่ง naive ดีที่สุดในเชิงทฤษฎีแต่ยังมี error จริง
+- image name ของ GHCR ต้องเป็นตัวพิมพ์เล็ก (repo ชื่อ `MLops`) → ใช้ `${GITHUB_REPOSITORY,,}`
+
 ### การใช้ AI
+- ใช้ Claude ช่วยเขียน `ci.yml`, `make_ci_data.py`, ออกแบบ demo FAIL และร่างรายงานส่วนนี้
+- ตรวจสอบโดย:
+  - รันขั้นตอนของ model-gate ในเครื่อง (MLflow file store → train → gate)
+  - ดูผล run จริงบน GitHub Actions ทั้งครั้ง PASS และ FAIL
+  - อ่าน log ทุก job
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+# ทำแบบเดียวกับ CI ในเครื่อง
+ruff check . && pytest -q
+python -m src.validate data/samples/good_sales.csv            # ต้องผ่าน (exit 0)
+python -m src.validate data/samples/bad_sales.csv; echo $?   # ต้องได้ 1
+mlflow server --port 5000 --backend-store-uri ./ci_mlflow/store --artifacts-destination ./ci_mlflow/artifacts &
+python .github/scripts/make_ci_data.py                        # ⚠️ เขียนทับ data/processed/daily_sales.parquet
+python -m src.train && python -m src.evaluate_gate
+docker build -t bakery-api .
+```
 
 ---
 
