@@ -13,7 +13,7 @@
     python -m src.monitor                                # ทั้ง 3 scenario (normal / data_drift / concept_drift)
     python -m src.monitor --scenario concept_drift --retrain
     python -m src.monitor --data new_sales.parquet       # ใช้กับยอดขายจริงที่เข้ามาใหม่ (date, article, qty)
-exit code: 0 = ไม่มี alert, 1 = มี alert (ใช้ใน cron/CI ให้รู้ว่าต้องดู)
+exit code (เฉพาะ --data): 0 = ไม่มี alert, 1 = มี alert (ใช้ใน cron ให้รู้ว่าต้องดู)
 """
 
 from __future__ import annotations
@@ -337,15 +337,33 @@ def monitor(frame: pd.DataFrame, cfg: dict, model: str = "auto", scenario: str =
     data = check_data_drift(reference, recent, mon["psi_threshold"])
 
     # ---- concept drift ----
-    wape_deploy = wape(deploy["actual"], predict(deploy))
+    # baseline "WAPE ตอน deploy" (config monitoring.wape_baseline):
+    #   max (ค่าเริ่มต้น) = ค่าที่สูงกว่าระหว่าง 2 แบบข้างล่าง → กันเตือนผิดทั้ง 2 สาเหตุ
+    #   validation       = WAPE ช่วง validation (2 เดือน, นิ่ง) แต่ ก.ค.–ส.ค. เป็นหน้าร้อนยอดสูง error สัมพัทธ์ต่ำ
+    #                      → เดือนที่ยอดลดลงเตือนผิดได้ (ทดสอบแล้วเกิดจริงบนข้อมูลสังเคราะห์)
+    #   first_week       = WAPE 7 วันแรกหลัง deploy (ฤดูกาลเดียวกัน) แต่ 1 สัปดาห์มี noise สูง
+    #                      → ถ้าสัปดาห์แรกบังเอิญดี จะเตือนผิด (ข้อมูลคงที่ WAPE_7d แกว่ง 0.09–0.14)
+    window = mon.get("wape_window_days", 7)
+    wape_val = wape(deploy["actual"], predict(deploy))
     cur = current.assign(pred=predict(current))
-    daily = rolling_wape(cur, mon.get("wape_window_days", 7))
+    daily = rolling_wape(cur, window)
+    first = daily.iloc[:window]
+    first_actual = first["actual"].sum()
+    wape_first = float(first["abs_err"].sum() / first_actual) if first_actual else float("nan")
+    mode = mon.get("wape_baseline", "max")
+    has_first = len(first) == window and not np.isnan(wape_first)
+    wape_deploy = {"validation": wape_val,
+                   "first_week": wape_first if has_first else wape_val,
+                   "max": max(wape_val, wape_first) if has_first else wape_val}[mode]
     latest = daily["wape_7d"].dropna()
     wape_7d = float(latest.iloc[-1]) if len(latest) else float("nan")
     limit = mon["wape_degradation_ratio"] * wape_deploy
     over = daily[daily["wape_7d"] > limit]
     concept = {
+        "baseline": mode,
         "wape_deploy": round(wape_deploy, 4),
+        "wape_validation": round(wape_val, 4),
+        "wape_first_week": round(wape_first, 4),
         "wape_7d_latest": round(wape_7d, 4),
         "wape_7d_max": round(float(latest.max()), 4) if len(latest) else None,
         "ratio": mon["wape_degradation_ratio"],
@@ -390,7 +408,7 @@ def plot_wape(results: dict[str, pd.DataFrame], limit: float, deploy: float, dri
     fig, ax = plt.subplots(figsize=(9, 4.5))
     for name, daily in results.items():
         ax.plot(daily["date"], daily["wape_7d"], marker="o", ms=3, label=name)
-    ax.axhline(deploy, color="grey", ls=":", label=f"WAPE at deploy = {deploy:.3f}")
+    ax.axhline(deploy, color="grey", ls=":", label=f"WAPE baseline (deploy) = {deploy:.3f}")
     ax.axhline(limit, color="red", ls="--", label=f"alert = 1.2 x deploy = {limit:.3f}")
     if drift_start is not None:
         ax.axvline(pd.Timestamp(drift_start), color="black", ls="-.", lw=1, label="drift starts")
@@ -415,7 +433,8 @@ def markdown_table(summaries: list[dict]) -> str:
         rows.append(
             f"| {s['scenario']} | {d['max_psi']:.3f} ({top}) | {'🔴 ALERT' if d['alert'] else '🟢 ok'} "
             f"| {c['wape_deploy']:.3f} | {c['wape_7d_latest']:.3f} (เกณฑ์ {c['limit']:.3f}) "
-            f"| {'🔴 ALERT' if c['alert'] else '🟢 ok'} | {'ใช่' if s['retrain']['needed'] else 'ไม่'} |")
+            f"| {'🔴 ALERT' if c['alert'] else '🟢 ok'} "
+            f"| {'ใช่ (' + ', '.join(s['retrain']['reasons']) + ')' if s['retrain']['needed'] else 'ไม่'} |")
     return "\n".join(rows)
 
 
@@ -471,7 +490,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"\nSystem (Prometheus {sysh['prometheus']}): "
           + (f"p95 = {sysh['p95_latency_ms']} ms, 5xx rate = {sysh['error_rate']}"
              if sysh["available"] else "ต่อไม่ได้ — เปิด docker compose ก่อนถ้าต้องการตรวจ latency/error"))
-    return 1 if any(any(s["alerts"].values()) for s in summaries) else 0
+    # exit 1 เฉพาะตอนเฝ้าข้อมูลจริง (--data) — โหมดจำลองตั้งใจให้มี alert อยู่แล้ว ไม่ควรทำให้ make drift ล้ม
+    alerted = any(any(s["alerts"].values()) for s in summaries)
+    return 1 if (args.data and alerted) else 0
 
 
 if __name__ == "__main__":
