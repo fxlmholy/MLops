@@ -30,14 +30,16 @@ pip install -r requirements.txt
 #    ครั้งแรก build image ~10 นาที · API จะขึ้นสถานะ degraded จนกว่าจะมีโมเดล champion (ปกติ)
 docker compose up -d --build
 
-# 3) ข้อมูล → โมเดล → registry (รันจากเครื่อง host ส่งผลเข้า MLflow ใน container)
-python -m src.ingest          # raw csv → data/processed/daily_sales.parquet + meta.json
-python -m src.validate        # ตรวจ schema (ไม่ผ่าน = exit 1 → หยุด)
-python -m src.train           # เทรน 4 โมเดล log เข้า MLflow
-python -m src.evaluate_gate   # ผ่าน gate → ลงทะเบียน → @champion
-#    เมื่อ P7 เสร็จ: ขั้นที่ 3 ทั้งหมด = make pipeline  (python -m src.flow)
+# 3) รัน pipeline ทั้งสายด้วยคำสั่งเดียว (Prefect DAG):
+#    ingest → validate → split → train (4 โมเดล + MLflow) → evaluate_gate → register → batch predict → reload API
+#    (ต้องเปิด MLflow ก่อน = ขั้นที่ 2)
+make pipeline                 # หรือ: python -m src.flow
+#    ถ้าไม่มี make ใช้ python -m src.flow ได้เลย
 
-# 4) ให้ API โหลด champion แล้วทดสอบ
+#    สาธิตข้อมูลเสีย: flow หยุดที่ validate (exit code 1) ไม่ train ต่อ
+python -m src.flow --data data/samples/bad_sales.csv
+
+# 4) ทดสอบ API (flow ข้างบนสั่ง reload ให้แล้ว — ถ้า API ยังไม่เห็นโมเดลให้สั่งเอง)
 curl -X POST http://localhost:8000/reload
 curl http://localhost:8000/health
 curl -X POST http://localhost:8000/recommend -H "Content-Type: application/json" \
@@ -54,7 +56,7 @@ curl -X POST http://localhost:8000/recommend -H "Content-Type: application/json"
 | `make serve` | `docker compose up -d --build` | เปิดทุก service |
 | `make test` | `ruff check . && pytest -q` | lint + test |
 | `make loadtest` | ดู `Makefile` (Windows ใช้ `--host http://127.0.0.1:8000`) | วัด p50/p95 latency + RPS |
-| `make drift` | `python -m src.simulate_drift && python -m src.monitor` | สาธิต data/concept drift |
+| `make drift` | `python -m src.simulate_drift && python -m src.monitor` | สาธิต data drift / concept drift + เกณฑ์แจ้งเตือน (รายละเอียดใน report §7) |
 | `make rollback` | `python -m src.registry rollback` แล้ว `curl -X POST localhost:8000/reload` | ย้าย `champion` กลับเวอร์ชันก่อน |
 | — | `python -m src.registry status` | ดูเวอร์ชัน / alias ทั้งหมด |
 | — | `python -m api.model_service` | batch พยากรณ์พรุ่งนี้ทุกสินค้า → `data/processed/predictions/` |
