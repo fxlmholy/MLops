@@ -12,7 +12,7 @@
 | 4 | Model Development & Experiment Tracking | M3 | ⬜ |
 | 5 | Model Registry, Gate & Rollback | M4 | ✅ |
 | 6 | Serving, Infrastructure & Load Test | M4 | ✅ |
-| 7 | Monitoring, Drift & Retraining | M5 | ⬜ |
+| 7 | Monitoring, Drift & Retraining | M5 | 🟨 |
 | 8 | Pipeline DAG | M2 | ⬜ |
 | 9 | CI/CD | M5 | ⬜ |
 | 10 | Architecture, Reproducibility & สรุป | M1 | ⬜ |
@@ -336,21 +336,97 @@ locust -f loadtest/locustfile.py --headless -u 50 -r 10 -t 60s --host http://127
 ---
 
 ## §7 Monitoring, Drift & Retraining
-**ผู้รับผิดชอบ:** M5 · **Reviewer:** M4 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M5 (@thanachotkam-hue) · **Reviewer:** M4 · **PR:** # · **วันที่เสร็จ:**
 
 ### สิ่งที่ทำ
+แบ่งการเฝ้าระวังเป็น 3 ชั้น เพราะแต่ละแบบมีสาเหตุและวิธีแก้ต่างกัน
+
+| ชั้น | ดูอะไร | เครื่องมือ | ไฟล์ |
+|---|---|---|---|
+| Data drift: P(X) เปลี่ยน | PSI ของ lag_1 / lag_7 / lag_14 (ปรับเป็นดัชนีรายสินค้า) และสัดส่วนยอดขายรายสินค้า | PSI ที่เขียนเอง + Evidently `DataDriftPreset(stattest="psi")` (HTML) | `src/monitor.py` |
+| Concept drift: P(y\|X) เปลี่ยน | WAPE ย้อนหลัง 7 วัน เทียบกับ WAPE ตอน deploy (ช่วง validation) | rolling WAPE | `src/monitor.py` |
+| System | p95 latency, 5xx error rate, API up, มีโมเดลหรือไม่ | Prometheus + alert rules + Grafana | `monitoring/` |
+
+- `src/simulate_drift.py` จำลองข้อมูล 3 แบบ โดย drift เริ่ม 7 วันหลังเริ่มช่วง test
+  - **normal**: ข้อมูลเดิม
+  - **data_drift**: ครึ่งหนึ่งของสินค้า × 1.5 (เช่นช่วงท่องเที่ยว) → lag feature และสัดส่วนสินค้าเลื่อน ส่วนความสัมพันธ์ X→y ยังเหมือนเดิม
+  - **concept_drift**: feature (`qty`) เหมือนเดิมทุกอย่าง แต่ยอดขายจริง (`actual`) × 0.6 (เช่นคู่แข่งเปิดร้าน)
+- `src/monitor.py`
+  - โหลด **champion จาก MLflow Registry** (ถ้าต่อไม่ได้จะใช้ LightGBM default ที่เทรนบนช่วง train แทน)
+  - สร้าง feature ด้วย `build_features` ตัวเดียวกับ train/serve
+  - คำนวณ PSI, WAPE_7d และดึง p95/error rate จาก Prometheus
+  - บันทึก `docs/evidence/p6_<scenario>_summary.json`, กราฟ `docs/evidence/p6_wape_7d.png` และ Evidently HTML ใน `reports/` (gitignored เพราะไฟล์ละ ~3 MB)
+  - พิมพ์ตาราง markdown สำหรับวางในรายงาน; exit code 1 เมื่อมี alert (ใช้กับ cron/CI ได้)
+- **Retrain loop** (`--retrain`): ถ้า `should_retrain()` คืนค่าจริง (มี alert หรือครบ 7 วันนับจากเทรนครั้งล่าสุด) จะรัน
+  `python -m src.train` (P3) → `python -m src.evaluate_gate` (P4) → `POST /reload` (P5)
+  และบันทึกว่า champion เปลี่ยนหรือไม่ โดยเรียกโค้ดของขั้นอื่นตามเดิม ไม่ได้แก้
+- `monitoring/alert_rules.yml`: `HighP95Latency` (> 200 ms), `HighErrorRate` (5xx > 1%), `ApiDown`, `ModelNotLoaded`
+- Grafana provisioning: datasource + dashboard **"Bakery API — System Health (P6)"** โหลดอัตโนมัติตอน `docker compose up`
+  - แผง: API up, availability 24h, champion version, p95, request rate, p50/p95/p99 พร้อมเส้น SLO, 5xx rate, status code
+- `docker-compose.yml`: แก้เฉพาะ service `prometheus` และ `grafana` เพื่อ mount ไฟล์ข้างบน
+- `configs/config.yaml`: เพิ่ม key ในส่วน `monitoring:` เท่านั้น (window, factor, URL)
+- `tests/test_monitor.py`: 14 tests (PSI, simulate, rolling WAPE, แยก data/concept drift ได้, system SLO, retrain policy) ใช้ข้อมูลสังเคราะห์ ไม่ต้องมี MLflow หรือ Prometheus
+
 ### การตัดสินใจและเหตุผล
+- **แยก data drift กับ concept drift** เพราะต้นเหตุต่างกัน
+  - data drift: input เปลี่ยน อาจยังทำนายดีอยู่ → ตรวจสอบ/เก็บข้อมูลเพิ่ม
+  - concept drift: input ปกติแต่ลูกค้าเปลี่ยนพฤติกรรม → เห็นได้จาก error เท่านั้น ต้อง retrain
+  - เกณฑ์ด้านข้อมูลจึงต้องมีทั้ง PSI และ WAPE
+- **PSI ใช้ lag ที่หารด้วยค่าเฉลี่ยของสินค้านั้นในช่วง train** (ดัชนียอดขาย) เพราะยอดแต่ละสินค้าต่างกันประมาณ 20 เท่า ถ้ารวมดิบ ความต่างระหว่างสินค้าจะกลบการเปลี่ยนจริง (ทดสอบแล้ว: สินค้าครึ่งหนึ่ง × 1.5 ได้ PSI แค่ ~0.05)
+- **ไม่ใช้ rolling_mean/rolling_std เป็นเกณฑ์ alert** (ยังดูได้ใน Evidently HTML): ค่าเรียบและต่อเนื่องกันวันต่อวัน ช่วงล่าสุดมีแค่ไม่กี่สัปดาห์ จึงได้ PSI สูงเกินจริง ทดสอบกับข้อมูลที่ไม่เปลี่ยนเลยก็ได้ PSI ~1.0
+- **ไม่ใช้ day_of_week / month / is_holiday** เพราะช่วง current เป็นเดือนเดียว ปฏิทินเลื่อนเสมอโดยไม่ได้แปลว่าผิดปกติ
+- **data drift เทียบ 14 วันล่าสุด** (`drift_window_days`) แทนทั้งช่วง test: ถ้าใช้ทั้งเดือน lag_14 ของต้นเดือนจะดึงค่าช่วงปลายเดือนก่อน (หน้าร้อน) มาปน ทดสอบแล้ว normal ได้ PSI 0.29 (เตือนผิด) ใช้ 14 วันแล้วเหลือ 0.05
+- **WAPE_7d = Σ|y−ŷ| / Σy ใน 7 วัน** ไม่ใช่ค่าเฉลี่ยของ WAPE รายวัน เพื่อไม่ให้วันที่ขายน้อยถ่วงผลเกินจริง; ตัดสิน alert จาก**ค่าล่าสุด**
+- **WAPE ตอน deploy = WAPE ของ champion บนช่วง validation** ซึ่งเป็นข้อมูลที่โมเดลไม่เคยเห็นและเป็นตัวเลขเดียวกับที่ใช้เลือกโมเดลใน §5
+- **นับเฉพาะ 5xx เป็น error rate**: 422 คือ input ผิดของผู้ใช้ ระบบทำงานถูกแล้ว (§6); query ใช้ `or vector(0)` เพื่อให้ได้ 0 แทน "ไม่มีข้อมูล" เมื่อไม่มี 5xx
+- **retrain ต้องผ่าน gate (§5) ทุกครั้ง**: ถ้าโมเดลใหม่แย่กว่า champion เดิมจะใช้ต่อ จึงตั้งให้ retrain อัตโนมัติได้อย่างปลอดภัย
+
 ### ผลลัพธ์ / หลักฐาน
+<!-- TODO(M5): รัน `make drift` (หรือ python -m src.simulate_drift && python -m src.monitor) ด้วยข้อมูล Kaggle จริง + champion ใน MLflow แล้ววางตารางที่โปรแกรมพิมพ์ออกมาแทนตารางนี้ -->
+| Scenario | max PSI (feature) | Data drift | WAPE deploy | WAPE_7d ล่าสุด | Concept drift | Retrain |
+|---|---|---|---|---|---|---|
+| normal | | | | | | |
+| data_drift | | | | | | |
+| concept_drift | | | | | | |
+
 | Alert | เกณฑ์ | ผลจากการจำลอง |
 |---|---|---|
-| Data Drift | PSI > 0.2 | |
-| Concept Drift | WAPE_7d > 1.2 × baseline | |
-| Latency | p95 > 200 ms | |
-| Error rate | > 1% | |
+| Data Drift | PSI > 0.2 | (จากตารางบน) |
+| Concept Drift | WAPE_7d > 1.2 × WAPE deploy | (จากตารางบน) |
+| Latency | p95 > 200 ms | (`HighP95Latency` ที่ http://localhost:9090/alerts) |
+| Error rate | 5xx > 1% | (`HighErrorRate` เช่น ปิด MLflow แล้ว restart api → predict ตอบ 503) |
+
+- กราฟ WAPE_7d: `docs/evidence/p6_wape_7d.png`
+- Evidently: `reports/p6_data_drift_data_drift.html` → แคปหน้าจอเก็บใน `docs/evidence/p6_evidently.png`
+- Grafana: http://localhost:3000 (admin/admin) → Bakery MLOps → *Bakery API — System Health (P6)* → แคปหน้าจอเก็บใน `docs/evidence/p6_grafana.png`
+- Retrain: `python -m src.monitor --scenario concept_drift --retrain` → ผลอยู่ใน `retrain.run` ของ `p6_concept_drift_summary.json`
 
 ### ปัญหาที่เจอและวิธีแก้
+- PSI ของ rolling feature เตือนผิดแม้ข้อมูลไม่เปลี่ยน → ใช้เฉพาะ lag ที่ปรับเป็นดัชนีรายสินค้าเป็นเกณฑ์
+- PSI ของ lag ดิบไม่เห็น drift เพราะความต่างระหว่างสินค้ากลบไว้ → หารด้วยค่าเฉลี่ยรายสินค้าในช่วง train
+- ช่วงต้นเดือนหลังหน้าร้อน lag_14 ยังเป็นค่าช่วงปลายเดือนก่อน → ใช้ 14 วันล่าสุดสำหรับ data drift
+- `sum(rate(...{status=~"5.."}))` ไม่คืนค่าเมื่อไม่มี 5xx เลย (error rate กลายเป็น "ไม่มีข้อมูล") → เติม `or vector(0)`
+- data drift ทำให้ WAPE สูงขึ้นด้วยช่วงหนึ่ง เพราะ lag ต้องใช้เวลาไล่ตามระดับยอดใหม่ ซึ่งเป็นพฤติกรรมจริงของ data drift (input เปลี่ยนก็กระทบ performance ได้) ข้อสังเกตคือ concept drift ทำให้ WAPE พุ่ง**โดยที่ PSI ปกติ** ใช้ข้อนี้แยกสองแบบออกจากกัน
+- **ข้อจำกัดของ retrain demo**: `train.py` ใช้ข้อมูล `data/processed` และ split ใน config ตายตัว ข้อมูลจำลอง drift จึงไม่ได้เข้าไปในการเทรน; ในการใช้งานจริง ingest จะดึงยอดขายใหม่เข้ามาก่อน retrain แล้วจึงเลื่อนช่วง split ตาม เดโมนี้จึงแสดงวงจร ตรวจพบ → trigger → โมเดลใหม่ → gate → registry และแสดงว่า gate กันไม่ให้โมเดลที่ไม่ดีขึ้นขึ้นเป็น champion
+
 ### การใช้ AI
+- ใช้ Claude ช่วยเขียน `src/monitor.py`, `src/simulate_drift.py`, `tests/test_monitor.py`, alert rules, Grafana dashboard และร่างรายงานส่วนนี้
+- ตรวจสอบโดย:
+  - รัน pytest และ ruff
+  - `promtool check rules/config`
+  - รัน API + Prometheus จริงแล้วทำให้ API ไม่มีโมเดล → `HighErrorRate` และ `ModelNotLoaded` เปลี่ยนเป็น firing และ `check_system()` อ่าน p95/error rate ได้ตรง
+  - รันวงจร `--retrain` กับ MLflow server จริง: train → gate → v2 ค้างเป็น challenger → reload
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+pytest -q tests/test_monitor.py
+docker compose up -d --build                      # mlflow, api, prometheus (+alert rules), grafana (+dashboard)
+python -m src.simulate_drift                      # → data/processed/drift/{normal,data_drift,concept_drift}.parquet
+python -m src.monitor                             # ทั้ง 3 scenario → ตาราง + json + png + Evidently html
+python -m src.monitor --scenario concept_drift --retrain   # สาธิต ตรวจพบ → train → gate → registry → reload
+python -m src.monitor --data <ยอดขายใหม่.parquet>          # ใช้กับข้อมูลจริงที่เข้ามาใหม่
+# Prometheus alerts: http://localhost:9090/alerts · Grafana: http://localhost:3000 (admin/admin)
+```
 
 ---
 
