@@ -1,34 +1,136 @@
+# P8 (M5) — CI 3 ด้าน + CD
+#   1) code-quality     ruff + pytest
+#   2) data-validation  Pandera: ไฟล์ดีต้องผ่าน, ไฟล์เสียต้องถูกจับ (exit != 0)
+#   3) model-gate       เทรนบนข้อมูล sample → evaluate_gate ต้องผ่าน gating metric (WAPE ดีกว่า naive >= 10%, < 50 MB)
+#   4) docker (CD)      build image API ทุก PR · push ghcr.io เมื่อ merge เข้า dev/main
+# job ใดล้ม → PR merge ไม่ได้ (branch protection: Require status checks)
 name: CI
+
 on:
   push:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:                       # push ใหม่ใน PR เดิม → ยกเลิกรอบเก่า ประหยัดเวลา runner
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.11"
+  PYTHONUNBUFFERED: "1"
 
 jobs:
   code-quality:            # ด้านที่ 1: คุณภาพโค้ด
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11", cache: pip }
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
       - run: pip install -r requirements.txt
-      - run: ruff check .
-      - run: pytest -q
+      - name: Lint (ruff)
+        run: ruff check . --output-format=github
+      - name: Unit tests (pytest)
+        run: pytest -q -p no:warnings
 
-  data-validation:         # ด้านที่ 2: ความถูกต้องของข้อมูล — TODO(M5/P8) เปิดใช้เมื่อ src.validate เสร็จ
+  data-validation:         # ด้านที่ 2: ความถูกต้องของข้อมูล
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: code-quality
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11", cache: pip }
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
       - run: pip install -r requirements.txt
-      - run: echo "TODO(P8) python -m src.validate data/samples/good_sales.csv (ต้องผ่าน) และไฟล์ bad ต้องถูกจับ"
+      - name: Good sample must PASS
+        run: python -m src.validate data/samples/good_sales.csv
+      - name: Bad sample must be CAUGHT (exit != 0)
+        run: |
+          if python -m src.validate data/samples/bad_sales.csv; then
+            echo "::error::bad_sales.csv ผ่าน validation — schema ไม่จับข้อมูลเสีย"
+            exit 1
+          fi
+          echo "✅ ข้อมูลเสียถูกจับได้ตามคาด"
+      - name: Upload validation alert log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: validation-alerts, path: logs/, if-no-files-found: ignore }
 
-  model-gate:              # ด้านที่ 3: เกณฑ์คุณภาพโมเดล — TODO(M5/P8)
+  model-gate:              # ด้านที่ 3: เกณฑ์คุณภาพโมเดล
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     needs: data-validation
     steps:
       - uses: actions/checkout@v4
-      - run: echo "TODO(P8) เทรนบน sample แล้วรัน src.evaluate_gate ต้องผ่าน gating metric"
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ env.PYTHON_VERSION }}", cache: pip }
+      - run: pip install -r requirements.txt
+      - name: Start MLflow server (file store)
+        run: |
+          mkdir -p ci_mlflow
+          nohup mlflow server --host 127.0.0.1 --port 5000 \
+            --backend-store-uri ./ci_mlflow/store --artifacts-destination ./ci_mlflow/artifacts \
+            > ci_mlflow/server.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:5000/health && exit 0; sleep 2; done
+          cat ci_mlflow/server.log; exit 1
+      - name: Build CI sample data
+        run: python .github/scripts/make_ci_data.py
+      - name: Validate sample data (schema ต้องผ่านก่อนเทรน)
+        run: |
+          python - <<'EOF'
+          import pandas as pd
+          from src.validate import validate
+          df = pd.read_parquet("data/processed/daily_sales.parquet")
+          meta = {"known_items": sorted(df["article"].unique()),
+                  "train_stats": {"mean": float(df["qty"].mean()), "std": float(df["qty"].std()),
+                                  "max": float(df["qty"].max())}}
+          validate(df, meta)
+          print("✅ schema ผ่าน", len(df), "แถว")
+          EOF
+      - name: Train (4 experiments → MLflow)
+        run: python -m src.train
+      - name: Model quality gate (ต้องผ่าน)
+        run: python -m src.evaluate_gate | tee gate.txt
+      - name: Gate summary
+        if: always()
+        run: |
+          echo "### Model quality gate" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat gate.txt >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "gate ไม่ได้รัน" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  docker:                  # ด้านที่ 4 (CD): build image ทุก PR, push GHCR เมื่อ merge เข้า dev/main
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: code-quality
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Login GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image name (ต้องเป็นตัวพิมพ์เล็ก)
+        id: img
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}/bakery-api" >> "$GITHUB_OUTPUT"
+      - name: Build (and push on dev/main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' }}
+          tags: |
+            ${{ steps.img.outputs.name }}:${{ github.sha }}
+            ${{ steps.img.outputs.name }}:${{ github.ref_name == 'main' && 'latest' || 'dev' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
