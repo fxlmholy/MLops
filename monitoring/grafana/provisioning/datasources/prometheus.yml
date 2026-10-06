@@ -1,0 +1,9 @@
+# P6 (M5): Grafana ต่อ Prometheus อัตโนมัติตอน start (ไม่ต้องกดตั้งค่าเอง)
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

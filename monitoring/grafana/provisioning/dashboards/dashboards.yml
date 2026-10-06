@@ -1,0 +1,8 @@
+# P6 (M5): โหลด dashboard จาก /var/lib/grafana/dashboards อัตโนมัติ
+apiVersion: 1
+providers:
+  - name: bakery
+    folder: Bakery MLOps
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards
