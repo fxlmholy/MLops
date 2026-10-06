@@ -32,7 +32,7 @@ metrics:                   # P1/M1 — ตัวชี้วัดของโ�
   business: [stockout_rate, waste_rate, lost_profit_per_day]  # simulate บน test set
 
 gate:                      # Gating metrics — ต้องผ่านทุกข้อจึง promote
-  min_improvement_vs_naive: 0.50   # WAPE ต้องดีกว่า seasonal-naive >= 10%
+  min_improvement_vs_naive: 0.10   # WAPE ต้องดีกว่า seasonal-naive >= 10%
   max_model_size_mb: 50
   max_p95_latency_ms: 200          # P1/M1
   require_schema_pass: true        # P1/M1 — ข้อมูลต้องผ่าน Pandera schema
