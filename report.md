@@ -13,7 +13,7 @@
 | 5 | Model Registry, Gate & Rollback | M4 | ✅ |
 | 6 | Serving, Infrastructure & Load Test | M4 | ✅ |
 | 7 | Monitoring, Drift & Retraining | M5 | 🟨 |
-| 8 | Pipeline DAG | M2 | ⬜ |
+| 8 | Pipeline DAG | M2 | 🟨 |
 | 9 | CI/CD | M5 | 🟨 |
 | 10 | Architecture, Reproducibility & สรุป | M1 | ⬜ |
 | 11 | สรุปการใช้ AI (รวมจากทุก section) | M1 | ⬜ |
@@ -26,7 +26,7 @@
 | รหัส | ชื่อ-สกุล | รหัสนักศึกษา | GitHub | บทบาท |
 |---|---|---|---|---|
 | M1 | | 67xxxxxxxx | @nattapongsric-collab | Project Lead / Framing / Report |
-| M2 | | 67xxxxxxxx | NongPP235 | Data Engineer |
+| M2 | | 673380633-5 | NongPP235 | Data Engineer |
 | M3 | | | | ML Engineer |
 | M4 | จิตติพัฒน์ มูลศรี | 673380437-5 | @fxlmholy | Serving Engineer |
 | M5 | ธนโชติ กมลเลิศ|673380630-1 |thanachotkam-hue | Ops Engineer |
@@ -451,14 +451,68 @@ python -m src.monitor --data <ยอดขายใหม่.parquet>          #
 ---
 
 ## §8 Pipeline DAG
-**ผู้รับผิดชอบ:** M2 · **Reviewer:** M1 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M2 (@NongPP235) · **Reviewer:** M1 (@nattapongsric-collab) · **PR:** #20 · **วันที่เสร็จ:** 2026-10-06
 
 ### สิ่งที่ทำ
+- `src/flow.py` — Prefect 2 flow `bakery-demand-pipeline` 7 task เรียงเป็น DAG:
+  `ingest → validate → split → train → evaluate_gate → register → batch_predict`
+  - **ingest**: `src.ingest.run()` raw csv → `data/processed/daily_sales.parquet` + `meta.json` (data version = SHA256)
+  - **validate**: Pandera schema ของ P2 — ไม่ผ่าน → `alert()` (log ERROR + `logs/validation_alerts.log`) แล้ว raise → **flow หยุด ไม่ train ต่อ**
+  - **split**: ตรวจว่าวันที่ใน config แบ่งได้ครบ train/val/test และ log ช่วงวันที่ (train.py แบ่งด้วยวันที่ชุดเดียวกัน)
+  - **train**: `src.train.main()` ของ M3 (4 โมเดล + MLflow ครบ 6 อย่าง)
+  - **evaluate_gate**: `src.evaluate_gate.evaluate()` ของ M4 — ไม่ผ่าน gate → raise → flow หยุด
+  - **register**: สรุปสถานะ registry (champion/challenger) + `POST /reload` ให้ API โหลด champion ใหม่ (API ไม่เปิด = เตือนแล้วไปต่อ)
+  - **batch_predict**: champion พยากรณ์ "พรุ่งนี้" ทุกสินค้า → `data/processed/predictions/<date>.csv`
+- รันคำสั่งเดียว `make pipeline` (= `python -m src.flow`), สาธิตไฟล์เสีย `python -m src.flow --data data/samples/bad_sales.csv`, ตั้งเวลาทุกคืน `python -m src.flow --serve` (cron 02:00)
+- `tests/test_flow.py` 4 tests: ไฟล์เสีย → flow ล้ม + มี alert, ไฟล์ดีผ่าน, exit code = 1, และ **validate ล้ม → train/gate ไม่ถูกเรียก**
+- pin `anyio==4.6.2` ใน `requirements.txt` เพราะ anyio รุ่นใหม่ทำให้ Prefect 2.20 crash (`GatherTaskGroup`)
+
 ### การตัดสินใจและเหตุผล
+- **task เรียกฟังก์ชันของเจ้าของขั้นตรง ๆ** (ไม่เขียน logic ซ้ำใน flow) → แก้ที่โมดูลเดียว flow ได้ผลตามทันที และแต่ละคนอธิบายส่วนตัวเองได้
+- **หยุดด้วยการ raise** แทนการเช็ก if/else ในทุกขั้น: Prefect ไม่เรียก task ถัดไปเมื่อ task ก่อนหน้า Failed, flow จบสถานะ Failed และ `main()` คืน exit code 1 ให้ CI / scheduler รู้
+- **gate ไม่ผ่าน = หยุดก่อน batch_predict** (ทางเลือก: ใช้ champion เดิมพยากรณ์ต่อ) เลือกหยุดให้ตรงกับ exit code ของ `evaluate_gate` — champion เดิมยังตอบ API ได้ และสั่ง batch เองได้ด้วย `python -m api.model_service`
+- **`--data` โหมดตรวจไฟล์**: ไฟล์ใน `data/samples/` เล็กเกินจะ train จึงหยุดหลัง validate — ใช้สาธิตข้อมูลเสียหน้าห้องได้โดยไม่แตะข้อมูลจริง
+- **รันทุกคืน 02:00** (`flow.serve`, cron) → flow ทั้งหมดใช้เวลา < 1 นาที เสร็จก่อน 06:00 ตาม SLO ของ batch
+- **Prefect แทน Airflow**: Python ล้วน รันบน Windows ได้ (ตาม CLAUDE.md §2)
+
 ### ผลลัพธ์ / หลักฐาน
+รัน `python -m src.flow` กับ MLflow server (ทดสอบบนข้อมูลจำลองรูปแบบเดียวกับ Kaggle — **ต้องรันซ้ำด้วยข้อมูลจริงแล้วแทนตัวเลข**):
+
+| task | ผล |
+|---|---|
+| ingest | 9,555 แถว, 15 สินค้า, data_version `ca4bd66a8bb5` |
+| validate | ผ่าน 9,555 แถว |
+| split | train 2021-01-02→2022-06-30 (8,175) · val →2022-08-31 (930) · test →2022-09-30 (450) |
+| train + evaluate_gate | lightgbm_default WAPE 0.156 vs naive 0.212 → ผ่าน → v1 champion (รอบสอง: v2 ไม่ชนะ v1 → ค้าง challenger) |
+| batch_predict | 15 สินค้า วันที่ 2022-10-01 → `data/processed/predictions/2022-10-01.csv` |
+| เวลาทั้ง flow | ~27 วินาที · สถานะ `Completed` · exit 0 |
+
+ข้อมูลเสีย:
+```
+$ python -m src.flow --data data/samples/bad_sales.csv
+ERROR | validate - VALIDATION FAILED ใน pipeline — พบ 12 จุดผิด → หยุด flow
+Flow run ... Finished in state Failed(...)
+[flow] ❌ pipeline หยุดที่ validate: พบ 12 จุดผิด (ไม่ train ต่อ) ดู logs/validation_alerts.log   (exit code 1)
+```
+- `ruff check .` ผ่าน · `pytest` ผ่าน 49/49 (รวม `tests/test_flow.py` 4 tests)
+
+> TODO: รันด้วยข้อมูล Kaggle จริง + แคป screenshot DAG / flow run ใน Prefect UI (`prefect server start` → http://localhost:4200) ใส่ `docs/evidence/p7_prefect_dag.png`
+
 ### ปัญหาที่เจอและวิธีแก้
+- `TypeError: Can't instantiate abstract class GatherTaskGroup` ทุกครั้งที่รัน flow → pip ติดตั้ง anyio รุ่นล่าสุดซึ่ง Prefect 2.20 ใช้ไม่ได้ → pin `anyio==4.6.2`
+- `train.py` ใช้ `mlflow.tracking_uri` จาก config (ไม่อ่าน env `MLFLOW_TRACKING_URI`) → ต้องเปิด MLflow ที่ `localhost:5000` ก่อนรัน flow (`docker compose up -d mlflow`)
+
 ### การใช้ AI
+- ใช้ Claude (Claude Code) ช่วยเขียน `src/flow.py`, `tests/test_flow.py` และร่าง section นี้; ตรวจสอบโดยรัน `ruff`, `pytest` และรัน flow จริงทั้งกรณีผ่านและกรณีข้อมูลเสีย
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+docker compose up -d mlflow                                # MLflow :5000
+python -m src.flow                                         # หรือ make pipeline (raw → serving)
+python -m src.flow --data data/samples/bad_sales.csv       # ข้อมูลเสีย → หยุดที่ validate, exit 1
+pytest tests/test_flow.py -v
+prefect server start                                       # (ไม่บังคับ) ดู DAG ที่ http://localhost:4200
+```
 
 ---
 
