@@ -46,6 +46,15 @@ slo:
 monitoring:
   psi_threshold: 0.2              # data drift
   wape_degradation_ratio: 1.2     # concept drift: WAPE_7d > 1.2 x WAPE ตอน deploy
+  wape_window_days: 7             # P6/M5: rolling window ของ WAPE
+  wape_baseline: max              # P6/M5: WAPE ตอน deploy = max(WAPE validation, WAPE 7 วันแรกหลัง deploy)
+  drift_window_days: 14           # P6/M5: data drift เทียบ N วันล่าสุดกับช่วง train
+  retrain_every_days: 7           # P6/M5: retrain ตาม schedule ทุกสัปดาห์ (หรือเมื่อมี alert)
+  drift_start_offset_days: 7      # P6/M5: จำลอง drift เริ่มหลังเริ่มช่วง test 7 วัน
+  data_drift_factor: 2.0          # P6/M5: สินค้าครึ่งหนึ่ง x2 อีกครึ่ง /2 (product mix เปลี่ยน)
+  concept_drift_factor: 0.6       # P6/M5: ยอดจริง x0.6 (คู่แข่งเปิดร้าน)
+  prometheus_url: http://localhost:9090
+  api_url: http://localhost:8000
 
 mlflow:
   tracking_uri: http://localhost:5000

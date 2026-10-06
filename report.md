@@ -12,7 +12,7 @@
 | 4 | Model Development & Experiment Tracking | M3 | ⬜ |
 | 5 | Model Registry, Gate & Rollback | M4 | ✅ |
 | 6 | Serving, Infrastructure & Load Test | M4 | ✅ |
-| 7 | Monitoring, Drift & Retraining | M5 | ⬜ |
+| 7 | Monitoring, Drift & Retraining | M5 | 🟨 |
 | 8 | Pipeline DAG | M2 | ⬜ |
 | 9 | CI/CD | M5 | ⬜ |
 | 10 | Architecture, Reproducibility & สรุป | M1 | ⬜ |
@@ -336,21 +336,117 @@ locust -f loadtest/locustfile.py --headless -u 50 -r 10 -t 60s --host http://127
 ---
 
 ## §7 Monitoring, Drift & Retraining
-**ผู้รับผิดชอบ:** M5 · **Reviewer:** M4 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M5 (@thanachotkam-hue) · **Reviewer:** M4 · **PR:** #17 · **วันที่เสร็จ:**
 
 ### สิ่งที่ทำ
+แบ่งการเฝ้าระวังเป็น 3 ชั้น เพราะแต่ละแบบมีสาเหตุและวิธีแก้ต่างกัน
+
+| ชั้น | ดูอะไร | เครื่องมือ | ไฟล์ |
+|---|---|---|---|
+| Data drift: P(X) เปลี่ยน | PSI ของ lag_1 / lag_7 (ปรับเป็นดัชนีรายสินค้า) และสัดส่วนยอดขายรายสินค้า ใน 14 วันล่าสุด เทียบกับช่วง train | PSI ที่เขียนเอง + Evidently `DataDriftPreset(stattest="psi")` (HTML) | `src/monitor.py` |
+| Concept drift: P(y\|X) เปลี่ยน | WAPE ย้อนหลัง 7 วัน เทียบกับ WAPE ตอน deploy (ค่าที่สูงกว่าระหว่าง validation กับ 7 วันแรกหลัง deploy) | rolling WAPE | `src/monitor.py` |
+| System | p95 latency, 5xx error rate, API up, มีโมเดลหรือไม่ | Prometheus + alert rules + Grafana | `monitoring/` |
+
+- `src/simulate_drift.py` จำลองข้อมูล 3 แบบ โดย drift เริ่ม 7 วันหลังเริ่มช่วง test
+  - **normal**: ข้อมูลเดิม
+  - **data_drift**: สินค้าครึ่งหนึ่ง × 2 อีกครึ่ง ÷ 2 (เช่นเปลี่ยนเมนู/จัดโปร) → สัดส่วนสินค้าและ lag feature เลื่อน ส่วนความสัมพันธ์ X→y ยังเหมือนเดิม
+  - **concept_drift**: feature (`qty`) เหมือนเดิมทุกอย่าง แต่ยอดขายจริง (`actual`) × 0.6 (เช่นคู่แข่งเปิดร้าน)
+- `src/monitor.py`
+  - โหลด **champion จาก MLflow Registry** (ถ้าต่อไม่ได้จะใช้ LightGBM default ที่เทรนบนช่วง train แทน)
+  - สร้าง feature ด้วย `build_features` ตัวเดียวกับ train/serve
+  - คำนวณ PSI, WAPE_7d และดึง p95/error rate จาก Prometheus
+  - บันทึก `docs/evidence/p6_<scenario>_summary.json`, กราฟ `docs/evidence/p6_wape_7d.png` และ Evidently HTML ใน `reports/` (gitignored เพราะไฟล์ละ ~3 MB)
+  - Evidently ดู**ค่าเดียวกับที่ใช้ alert**: `lag_1_index`, `lag_7_index` และ `article_sold` (สุ่มชื่อสินค้าถ่วงตามจำนวนชิ้นที่ขาย = product mix)
+  - พิมพ์ตาราง markdown สำหรับวางในรายงาน; เมื่อเฝ้าข้อมูลจริง (`--data`) คืน exit code 1 ถ้ามี alert (ใช้กับ cron ได้)
+- **Retrain loop** (`--retrain`): ถ้า `should_retrain()` คืนค่าจริง (มี alert หรือครบ 7 วันนับจากเทรนครั้งล่าสุด) จะรัน
+  `python -m src.train` (P3) → `python -m src.evaluate_gate` (P4) → `POST /reload` (P5)
+  และบันทึกว่า champion เปลี่ยนหรือไม่ โดยเรียกโค้ดของขั้นอื่นตามเดิม ไม่ได้แก้
+- `monitoring/alert_rules.yml`: `HighP95Latency` (> 200 ms), `HighErrorRate` (5xx > 1%), `ApiDown`, `ModelNotLoaded`
+- Grafana provisioning: datasource + dashboard **"Bakery API — System Health (P6)"** โหลดอัตโนมัติตอน `docker compose up`
+  - แผง: API up, availability 24h, champion version, p95, request rate, p50/p95/p99 พร้อมเส้น SLO, 5xx rate, status code
+- `docker-compose.yml`: แก้เฉพาะ service `prometheus` และ `grafana` เพื่อ mount ไฟล์ข้างบน
+- `configs/config.yaml`: เพิ่ม key ในส่วน `monitoring:` เท่านั้น (window, factor, URL)
+- `tests/test_monitor.py`: 14 tests (PSI, simulate, rolling WAPE, แยก data/concept drift ได้, system SLO, retrain policy) ใช้ข้อมูลสังเคราะห์ ไม่ต้องมี MLflow หรือ Prometheus
+
 ### การตัดสินใจและเหตุผล
+- **แยก data drift กับ concept drift** เพราะต้นเหตุต่างกัน
+  - data drift: input เปลี่ยน อาจยังทำนายดีอยู่ → ตรวจสอบ/เก็บข้อมูลเพิ่ม
+  - concept drift: input ปกติแต่ลูกค้าเปลี่ยนพฤติกรรม → เห็นได้จาก error เท่านั้น ต้อง retrain
+  - เกณฑ์ด้านข้อมูลจึงต้องมีทั้ง PSI และ WAPE
+- **PSI ใช้ lag ที่หารด้วยค่าเฉลี่ยของสินค้านั้นในช่วง train** (ดัชนียอดขาย) เพราะยอดแต่ละสินค้าต่างกันประมาณ 20 เท่า ถ้ารวมดิบ ความต่างระหว่างสินค้าจะกลบการเปลี่ยนจริง (ทดสอบแล้ว: สินค้าครึ่งหนึ่ง × 1.5 ได้ PSI แค่ ~0.05)
+- **ไม่ใช้ lag_14 เป็นเกณฑ์** (ยังดูได้ใน Evidently): ใน 14 วันล่าสุด lag_14 คือยอดของ 2 สัปดาห์ก่อนหน้า ข้อมูลจริงเดือน ก.ย. normal ได้ PSI 0.30 (เตือนผิด) ขณะที่ lag_1 / lag_7 ได้ 0.13 / 0.15
+- **จำลอง data drift ด้วยการเปลี่ยนสัดส่วนสินค้า** (× 2 / ÷ 2) แทนการคูณยอดขึ้นอย่างเดียว: ข้อมูลจริง ก.ย. ยอดต่ำกว่าค่าเฉลี่ยทั้งปีอยู่แล้ว การคูณ 1.5 จึงดึงยอดกลับเข้าใกล้ค่าเฉลี่ย PSI ลดลงเหลือ 0.16 (ต่ำกว่า normal) ไม่ใช่การจำลองที่ดี ส่วนสัดส่วนสินค้าไม่ขึ้นกับฤดูกาล
+- **ไม่ใช้ rolling_mean/rolling_std เป็นเกณฑ์ alert** (ยังดูได้ใน Evidently HTML): ค่าเรียบและต่อเนื่องกันวันต่อวัน ช่วงล่าสุดมีแค่ไม่กี่สัปดาห์ จึงได้ PSI สูงเกินจริง ทดสอบกับข้อมูลที่ไม่เปลี่ยนเลยก็ได้ PSI ~1.0
+- **ไม่ใช้ day_of_week / month / is_holiday** เพราะช่วง current เป็นเดือนเดียว ปฏิทินเลื่อนเสมอโดยไม่ได้แปลว่าผิดปกติ
+- **data drift เทียบ 14 วันล่าสุด** (`drift_window_days`) แทนทั้งช่วง test: ไวต่อการเปลี่ยนล่าสุด และไม่ดึงค่าช่วงหน้าร้อนตอนต้นเดือนมาปน (ข้อมูลสังเคราะห์: ทั้งเดือน 0.29 → 14 วัน 0.05)
+- **WAPE_7d = Σ|y−ŷ| / Σy ใน 7 วัน** ไม่ใช่ค่าเฉลี่ยของ WAPE รายวัน เพื่อไม่ให้วันที่ขายน้อยถ่วงผลเกินจริง; ตัดสิน alert จาก**ค่าล่าสุด**
+- **WAPE ตอน deploy = max(WAPE ช่วง validation, WAPE 7 วันแรกหลัง deploy)** (`monitoring.wape_baseline: max`) เพราะใช้แบบใดแบบหนึ่งอย่างเดียวแล้วเตือนผิด (ทดสอบกับข้อมูลสังเคราะห์)
+  - validation อย่างเดียว: ช่วงนี้คือ ก.ค.–ส.ค. (หน้าร้อน ยอดสูง) error สัมพัทธ์จึงต่ำ พอเทียบกับ ก.ย. ที่ยอดลดลงก็เตือนผิด (normal: 0.129 > 1.2 × 0.107)
+  - 7 วันแรกอย่างเดียว: 1 สัปดาห์มี noise สูง ข้อมูลคงที่ยังได้ WAPE_7d แกว่ง 0.09–0.14 ถ้าสัปดาห์แรกบังเอิญต่ำก็เตือนผิด (0.129 > 1.2 × 0.099)
+  - ใช้ค่าที่สูงกว่า: กันเตือนผิดได้ทั้ง 2 สาเหตุ ส่วน concept drift จริง (ยอด × 0.6 → WAPE ~0.6) ยังจับได้ชัด · summary บันทึกทั้ง `wape_validation` และ `wape_first_week`
+  - ข้อมูลจริงยืนยัน: WAPE_7d ของ normal ช่วง 19–25 ก.ย. ขึ้นไป ~0.34 ถ้าใช้ validation (0.192 → เกณฑ์ 0.23) จะเตือนผิด · ใช้ max ได้ baseline 0.370 (สัปดาห์แรก ก.ย. ยังเป็นช่วงเปลี่ยนจากหน้าร้อน) → เกณฑ์ 0.444
+- **นับเฉพาะ 5xx เป็น error rate**: 422 คือ input ผิดของผู้ใช้ ระบบทำงานถูกแล้ว (§6); query ใช้ `or vector(0)` เพื่อให้ได้ 0 แทน "ไม่มีข้อมูล" เมื่อไม่มี 5xx
+- **retrain ต้องผ่าน gate (§5) ทุกครั้ง**: ถ้าโมเดลใหม่แย่กว่า champion เดิมจะใช้ต่อ จึงตั้งให้ retrain อัตโนมัติได้อย่างปลอดภัย
+
 ### ผลลัพธ์ / หลักฐาน
-| Alert | เกณฑ์ | ผลจากการจำลอง |
+**ข้อมูล Kaggle จริง** (champion v1 = `lightgbm_default`, WAPE validation 0.192) · reference = ช่วง train (2021-01-16 → 2022-06-30) · current = ก.ย. 2022 · data drift ดู 17–30 ก.ย. · drift จำลองเริ่ม 2022-09-08 → [`p6_normal_summary.json`](docs/evidence/p6_normal_summary.json), [`p6_data_drift_summary.json`](docs/evidence/p6_data_drift_summary.json), [`p6_concept_drift_summary.json`](docs/evidence/p6_concept_drift_summary.json)
+
+| Scenario | max PSI (feature) | Data drift | WAPE deploy | WAPE_7d ล่าสุด | Concept drift | Retrain |
+|---|---|---|---|---|---|---|
+| normal | 0.153 (lag_7) | 🟢 ok | 0.370 | 0.182 (เกณฑ์ 0.444) | 🟢 ok | ไม่ |
+| data_drift | 0.435 (article_mix) | 🔴 ALERT | 0.370 | 0.290 (เกณฑ์ 0.444) | 🟢 ok | ใช่ (alert:data_drift) |
+| concept_drift | 0.153 (lag_7) | 🟢 ok | 0.370 | 0.600 (เกณฑ์ 0.444) | 🔴 ALERT | ใช่ (alert:concept_drift) |
+
+- **แยกสองแบบได้ชัด**: data drift → PSI เตือน (สัดส่วนสินค้า 0.435, lag_1 0.30) แต่ WAPE ยังอยู่ใต้เกณฑ์ · concept drift → WAPE_7d พุ่งถึง 0.91 (เตือนตั้งแต่ 12 ก.ย. = 4 วันหลัง drift เริ่ม) แต่ PSI เท่ากับ normal เพราะ input ไม่เปลี่ยน
+- Evidently (ค่าเดียวกับที่ใช้ alert, PSI): data_drift ตรวจพบ 3/3 คอลัมน์ → *Dataset Drift is detected* · normal และ concept_drift 1/3 → ไม่ถือว่า dataset drift (Evidently แบ่ง bin ต่างจากของเรา `lag_1_index` จึงได้ 0.22 แทน 0.13)
+
+| Alert | เกณฑ์ | ผล |
 |---|---|---|
-| Data Drift | PSI > 0.2 | |
-| Concept Drift | WAPE_7d > 1.2 × baseline | |
-| Latency | p95 > 200 ms | |
-| Error rate | > 1% | |
+| Data Drift | PSI > 0.2 | data_drift: 🔴 0.435 · normal/concept: 🟢 0.153 |
+| Concept Drift | WAPE_7d > 1.2 × WAPE deploy | concept_drift: 🔴 0.600 > 0.444 · normal: 🟢 0.182 |
+| Latency | p95 > 200 ms | 🟢 p95 = 4.9 ms (Locust 20 users 90 วินาที, 5,883 requests, 0 failures) |
+| Error rate | 5xx > 1% | 🟢 0% ตอนปกติ · 🔴 สาธิต: ให้ API ไม่มีโมเดล → predict ตอบ 503 → `HighErrorRate` + `ModelNotLoaded` = **firing** |
+
+![WAPE_7d](docs/evidence/p6_wape_7d.png)
+
+![Evidently data drift](docs/evidence/p6_evidently.png)
+
+![Prometheus alerts](docs/evidence/p6_alerts.png)
+
+- **Retrain demo** (`--scenario concept_drift --retrain`) → [`p6_retrain_demo.json`](docs/evidence/p6_retrain_demo.json): concept drift alert → `src.train` ✅ → `src.evaluate_gate` ✅ ผ่าน gate (WAPE 0.192 vs naive 0.288) → **v2 = challenger** เพราะไม่ดีกว่า v1 → `/reload` → API ยังใช้ v1
+- Grafana: http://localhost:3000 (admin/admin) → Bakery MLOps → *Bakery API — System Health (P6)* <!-- TODO(M5): แคปหลัง docker compose up + locust → docs/evidence/p6_grafana.png -->
+- ตัวเลขทั้งหมดรันในเครื่องด้วย MLflow server + uvicorn + Prometheus (ไม่ใช่ docker compose) ใช้โค้ดและ config ชุดเดียวกัน
 
 ### ปัญหาที่เจอและวิธีแก้
+- PSI ของ rolling feature เตือนผิดแม้ข้อมูลไม่เปลี่ยน → ใช้เฉพาะ lag ที่ปรับเป็นดัชนีรายสินค้าเป็นเกณฑ์
+- PSI ของ lag ดิบไม่เห็น drift เพราะความต่างระหว่างสินค้ากลบไว้ → หารด้วยค่าเฉลี่ยรายสินค้าในช่วง train
+- ช่วงต้นเดือนหลังหน้าร้อน lag_14 ยังเป็นค่าช่วงปลายเดือนก่อน → ใช้ 14 วันล่าสุดสำหรับ data drift และตัด lag_14 ออกจากเกณฑ์
+- รันข้อมูลจริงครั้งแรก: normal เตือน data drift (lag_14 = 0.30) และ data_drift (× 1.5) ได้ PSI แค่ 0.16 → ตัด lag_14 และเปลี่ยนการจำลองเป็น product mix (ดูเหตุผลด้านบน)
+- Evidently รอบแรกดู feature ดิบ (คนละค่ากับที่ใช้ alert) → รายงานบอกว่า *ไม่* drift ขณะที่ระบบเตือน → เปลี่ยนให้ Evidently ดูดัชนียอดขายและ product mix เหมือนกัน
+- baseline WAPE แบบเดียวเตือน concept drift ผิดใน scenario normal (ดูเหตุผลด้านบน) → ใช้ max ของ validation กับ 7 วันแรกหลัง deploy
+- **ข้อจำกัดที่ยังเหลือ**: PSI เทียบกับช่วง train ทั้งปี ถ้าข้อมูลมีฤดูกาลแรง ระดับยอดของเดือนที่เฝ้าดูต่างจากค่าเฉลี่ยทั้งปีได้ PSI อาจเกิน 0.2 แม้ใน scenario normal (ข้อมูลจริง ก.ย. normal = 0.153 ยังไม่เกิน แต่เดือนอื่นอาจเกิน) → data drift alert จึงแปลว่า "input ต่างจากที่โมเดลเคยเห็น ควรตรวจสอบ" ไม่ได้แปลว่าโมเดลพังเสมอ ต้องดูคู่กับ concept drift
+- `sum(rate(...{status=~"5.."}))` ไม่คืนค่าเมื่อไม่มี 5xx เลย (error rate กลายเป็น "ไม่มีข้อมูล") → เติม `or vector(0)`
+- data drift ทำให้ WAPE สูงขึ้นด้วยช่วงหนึ่ง เพราะ lag ต้องใช้เวลาไล่ตามระดับยอดใหม่ ซึ่งเป็นพฤติกรรมจริงของ data drift (input เปลี่ยนก็กระทบ performance ได้) ข้อสังเกตคือ concept drift ทำให้ WAPE พุ่ง**โดยที่ PSI ปกติ** ใช้ข้อนี้แยกสองแบบออกจากกัน
+- **ข้อจำกัดของ retrain demo**: `train.py` ใช้ข้อมูล `data/processed` และ split ใน config ตายตัว ข้อมูลจำลอง drift จึงไม่ได้เข้าไปในการเทรน; ในการใช้งานจริง ingest จะดึงยอดขายใหม่เข้ามาก่อน retrain แล้วจึงเลื่อนช่วง split ตาม เดโมนี้จึงแสดงวงจร ตรวจพบ → trigger → โมเดลใหม่ → gate → registry และแสดงว่า gate กันไม่ให้โมเดลที่ไม่ดีขึ้นขึ้นเป็น champion
+
 ### การใช้ AI
+- ใช้ Claude ช่วยเขียน `src/monitor.py`, `src/simulate_drift.py`, `tests/test_monitor.py`, alert rules, Grafana dashboard และร่างรายงานส่วนนี้
+- ตรวจสอบโดย:
+  - รัน pytest และ ruff
+  - `promtool check rules/config`
+  - รัน API + Prometheus จริงแล้วทำให้ API ไม่มีโมเดล → `HighErrorRate` และ `ModelNotLoaded` เปลี่ยนเป็น firing และ `check_system()` อ่าน p95/error rate ได้ตรง
+  - รันกับข้อมูล Kaggle จริงครบทุกขั้น (ingest → train → gate → monitor 3 scenario → retrain → alert) และเทียบตัวเลขกับ §5 (WAPE 0.192 / naive 0.288 ตรงกัน)
+
 ### วิธีรัน/ทดสอบส่วนนี้
+```bash
+pytest -q tests/test_monitor.py
+docker compose up -d --build                      # mlflow, api, prometheus (+alert rules), grafana (+dashboard)
+python -m src.simulate_drift                      # → data/processed/drift/{normal,data_drift,concept_drift}.parquet
+python -m src.monitor                             # ทั้ง 3 scenario → ตาราง + json + png + Evidently html
+python -m src.monitor --scenario concept_drift --retrain   # สาธิต ตรวจพบ → train → gate → registry → reload
+python -m src.monitor --data <ยอดขายใหม่.parquet>          # ใช้กับข้อมูลจริงที่เข้ามาใหม่
+# Prometheus alerts: http://localhost:9090/alerts · Grafana: http://localhost:3000 (admin/admin)
+```
 
 ---
 

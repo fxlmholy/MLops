@@ -1,0 +1,37 @@
+# P6 (M5) — Prometheus alert rules (เกณฑ์เดียวกับ configs/config.yaml → slo)
+# ดูสถานะ alert: http://localhost:9090/alerts
+groups:
+  - name: bakery-api-slo
+    rules:
+      - alert: HighP95Latency
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(request_latency_seconds_bucket{endpoint=~"/predict|/recommend"}[5m]))) > 0.2
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 latency > 200 ms (SLO)"
+          description: "p95 = {{ $value | humanizeDuration }} — ตรวจ CPU ของ container / จำนวน request"
+
+      - alert: HighErrorRate
+        # นับเฉพาะ 5xx (ระบบพัง) — 422 = input ผิดของผู้ใช้ ไม่ใช่ error ของระบบ
+        expr: |
+          (sum(rate(requests_total{status=~"5.."}[5m])) or vector(0)) / sum(rate(requests_total{endpoint!="/metrics"}[5m])) > 0.01
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "5xx error rate > 1% (SLO)"
+          description: "error rate = {{ $value | humanizePercentage }}"
+
+      - alert: ApiDown
+        expr: up{job="bakery-api"} == 0
+        for: 30s
+        labels: { severity: critical }
+        annotations:
+          summary: "Prometheus scrape API ไม่ได้ (availability SLO 99%)"
+
+      - alert: ModelNotLoaded
+        expr: model_loaded == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "API ไม่มีโมเดล champion — predict ตอบ 503 (รัน gate แล้ว POST /reload)"

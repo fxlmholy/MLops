@@ -1,0 +1,75 @@
+{
+  "scenario": "normal",
+  "checked_at": "2026-10-06T12:00:04+00:00",
+  "model": {
+    "source": "mlflow champion",
+    "model_version": "1",
+    "run_id": "4deb0dd3e1cd499584f776ff76b22e90",
+    "trained_at": "2026-10-06T11:54:28.641000+00:00"
+  },
+  "windows": {
+    "reference": [
+      "2021-01-16",
+      "2022-06-30"
+    ],
+    "deploy": [
+      "2022-07-01",
+      "2022-08-31"
+    ],
+    "current": [
+      "2022-09-01",
+      "2022-09-30"
+    ],
+    "data_drift_window": [
+      "2022-09-17",
+      "2022-09-30"
+    ],
+    "drift_start": null
+  },
+  "data_drift": {
+    "psi": {
+      "lag_1": 0.1253,
+      "lag_7": 0.1528,
+      "article_mix": 0.0063
+    },
+    "max_psi": 0.1528,
+    "threshold": 0.2,
+    "drifted_features": [],
+    "alert": false,
+    "evidently": {
+      "html": "reports/p6_normal_data_drift.html",
+      "share_of_drifted_columns": 0.3333,
+      "dataset_drift": false
+    }
+  },
+  "concept_drift": {
+    "baseline": "max",
+    "wape_deploy": 0.3703,
+    "wape_validation": 0.192,
+    "wape_first_week": 0.3703,
+    "wape_7d_latest": 0.1824,
+    "wape_7d_max": 0.3703,
+    "ratio": 1.2,
+    "limit": 0.4443,
+    "first_alert_date": null,
+    "alert": false
+  },
+  "system": {
+    "prometheus": "http://localhost:9090",
+    "available": true,
+    "p95_latency_ms": 4.9,
+    "error_rate": 0.0,
+    "latency_alert": false,
+    "error_alert": false
+  },
+  "alerts": {
+    "data_drift": false,
+    "concept_drift": false,
+    "latency": false,
+    "error_rate": false
+  },
+  "retrain": {
+    "needed": false,
+    "reasons": []
+  }
+}
