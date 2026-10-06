@@ -27,7 +27,7 @@
 |---|---|---|---|---|
 | M1 | | 67xxxxxxxx | @nattapongsric-collab | Project Lead / Framing / Report |
 | M2 | | 67xxxxxxxx | NongPP235 | Data Engineer |
-| M3 | | | | ML Engineer |
+| M3 | ภูริชญา โมรา | 673380636-9|purichayam-dot | ML Engineer |
 | M4 | | | | Serving Engineer |
 | M5 | ธนโชติ กมลเลิศ|673380630-1 |thanachotkam-hue | Ops Engineer |
 
