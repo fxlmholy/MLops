@@ -67,12 +67,15 @@ def test_concept_drift_keeps_features_changes_actual(daily):
     assert (out.loc[~after, "actual"] == out.loc[~after, "qty"]).all()
 
 
-def test_data_drift_changes_half_of_articles_only_after_start(daily):
-    out = make_data_drift(daily, 1.5, start="2022-06-01")
-    moved = out["article"].isin(drifted_articles(out["article"])) & (out["date"] >= "2022-06-01")
+def test_data_drift_shifts_product_mix_only_after_start(daily):
+    out = make_data_drift(daily, 2.0, start="2022-06-01")
+    after = (out["date"] >= "2022-06-01").to_numpy()
+    up = out["article"].isin(drifted_articles(out["article"])).to_numpy() & after
+    down = after & ~up
     base = daily["qty"].astype(float).to_numpy()
-    assert np.allclose(out.loc[moved, "qty"], (base[moved.to_numpy()] * 1.5).round())
-    assert np.allclose(out.loc[~moved, "qty"], base[~moved.to_numpy()])
+    assert np.allclose(out.loc[up, "qty"], (base[up] * 2).round())
+    assert np.allclose(out.loc[down, "qty"], (base[down] / 2).round())
+    assert np.allclose(out.loc[~after, "qty"], base[~after])
     assert (out["actual"] == out["qty"]).all()                           # P(y|X) เดิม
 
 

@@ -42,8 +42,10 @@ log = logging.getLogger("monitor")
 #     → PSI สูงเกินจริงแม้ข้อมูลไม่เปลี่ยน (ทดสอบกับข้อมูลคงที่ได้ PSI ~1.0) จึงแสดงใน Evidently HTML อย่างเดียว
 #   - ไม่ใช้ day_of_week/month/is_holiday: ช่วง current เป็นเดือนเดียว ปฏิทินจึง "เลื่อน" เสมอโดยไม่ผิดปกติ
 #   - ÷ ค่าเฉลี่ยรายสินค้า: ยอดแต่ละสินค้าต่างกัน ~20 เท่า ถ้าไม่ปรับ ความต่างระหว่างสินค้ากลบการเปลี่ยนจริง
-ALERT_FEATURES = ["lag_1", "lag_7", "lag_14"]
-MONITORED_FEATURES = ALERT_FEATURES + ["rolling_mean_7", "rolling_mean_28", "rolling_std_7"]  # Evidently HTML
+#   - ไม่ใช้ lag_14: ใน 14 วันล่าสุด lag_14 คือยอดของ 2 สัปดาห์ก่อนหน้า (ข้อมูลจริง ก.ย. = ช่วงหลังหน้าร้อน)
+#     ทำให้ normal ได้ PSI 0.30 (เตือนผิด) ขณะที่ lag_1/lag_7 = 0.13/0.15
+ALERT_FEATURES = ["lag_1", "lag_7"]
+MONITORED_FEATURES = ALERT_FEATURES + ["lag_14", "rolling_mean_7", "rolling_mean_28", "rolling_std_7"]
 EVIDENCE_DIR = ROOT / "docs" / "evidence"
 REPORT_DIR = ROOT / "reports"  # html ของ Evidently ใหญ่ → อยู่ใน .gitignore (reports/*.html)
 EPS = 1e-4
@@ -85,6 +87,12 @@ def _psi_from_pct(ref_pct, cur_pct) -> float:
     return float(np.sum((cur_pct - ref_pct) * np.log(cur_pct / ref_pct)))
 
 
+def demand_index(reference: pd.DataFrame, current: pd.DataFrame, col: str) -> tuple[pd.Series, pd.Series]:
+    """ค่า feature ÷ ค่าเฉลี่ยของสินค้านั้นในช่วง reference (1.0 = ขายเท่าปกติของสินค้านั้น)"""
+    scale = reference.groupby("article")[col].mean().replace(0, np.nan)
+    return reference[col] / reference["article"].map(scale), current[col] / current["article"].map(scale)
+
+
 def check_data_drift(reference: pd.DataFrame, current: pd.DataFrame, threshold: float,
                      columns: list[str] | None = None, weight_col: str = "qty") -> dict:
     """PSI ของดัชนียอดขาย (lag ÷ ค่าเฉลี่ยรายสินค้า) + PSI ของสัดส่วนยอดขายรายสินค้า → alert ถ้าตัวใด > threshold"""
@@ -92,11 +100,7 @@ def check_data_drift(reference: pd.DataFrame, current: pd.DataFrame, threshold: 
     by_item = "article" in reference.columns and "article" in current.columns
     scores = {}
     for c in columns:
-        ref, cur = reference[c], current[c]
-        if by_item:
-            scale = reference.groupby("article")[c].mean().replace(0, np.nan)
-            ref = ref / reference["article"].map(scale)
-            cur = cur / current["article"].map(scale)
+        ref, cur = demand_index(reference, current, c) if by_item else (reference[c], current[c])
         scores[c] = round(psi(ref, cur), 4)
     if by_item:
         # สัดส่วน "ยอดขาย" ของแต่ละสินค้า (ไม่ใช่จำนวนแถว เพราะทุกสินค้ามี 1 แถว/วันเท่ากัน)
@@ -116,9 +120,28 @@ def check_data_drift(reference: pd.DataFrame, current: pd.DataFrame, threshold: 
     }
 
 
+def evidently_table(reference: pd.DataFrame, current: pd.DataFrame, columns: list[str],
+                    seed: int = 42) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """เตรียมตารางให้ Evidently ดูค่าเดียวกับที่ใช้ตัดสิน alert
+
+    - `<lag>_index` = ดัชนียอดขาย (ดู demand_index)
+    - `article_sold` = สุ่มชื่อสินค้าถ่วงตามจำนวนชิ้นที่ขาย (qty) → distribution = product mix
+      (Evidently ทดสอบทีละคอลัมน์ จึงสุ่มคอลัมน์นี้แยกได้)
+    """
+    rng = np.random.default_rng(seed)
+    idx = {c: demand_index(reference, current, c) for c in columns}
+    out = []
+    for k, frame in enumerate((reference, current)):
+        t = pd.DataFrame({f"{c}_index": idx[c][k].to_numpy() for c in columns})
+        w = frame["qty"].clip(lower=0).to_numpy(float)
+        t["article_sold"] = rng.choice(frame["article"].to_numpy(), len(t), p=w / w.sum())
+        out.append(t)
+    return out[0], out[1]
+
+
 def evidently_report(reference: pd.DataFrame, current: pd.DataFrame, columns: list[str],
                      threshold: float, path) -> dict | None:
-    """รายงาน HTML ของ Evidently (DataDriftPreset, stattest = PSI เกณฑ์เดียวกัน) สำหรับดูกราฟ distribution"""
+    """รายงาน HTML ของ Evidently (DataDriftPreset, stattest = PSI เกณฑ์เดียวกัน) บนค่าเดียวกับที่ใช้ alert"""
     try:
         from evidently import ColumnMapping
         from evidently.metric_preset import DataDriftPreset
@@ -126,11 +149,11 @@ def evidently_report(reference: pd.DataFrame, current: pd.DataFrame, columns: li
     except ImportError as exc:  # evidently อยู่ใน requirements แต่ไม่ให้ monitoring ล้มเพราะรายงานภาพ
         log.warning("ข้าม Evidently report: %s", exc)
         return None
-    mapping = ColumnMapping(numerical_features=columns, categorical_features=["article"])
-    cols = columns + ["article"]
+    ref_t, cur_t = evidently_table(reference, current, columns)
+    num = [c for c in ref_t.columns if c.endswith("_index")]
+    mapping = ColumnMapping(numerical_features=num, categorical_features=["article_sold"])
     report = Report(metrics=[DataDriftPreset(stattest="psi", stattest_threshold=threshold)])
-    report.run(reference_data=reference[cols].reset_index(drop=True),
-               current_data=current[cols].reset_index(drop=True), column_mapping=mapping)
+    report.run(reference_data=ref_t, current_data=cur_t, column_mapping=mapping)
     path.parent.mkdir(parents=True, exist_ok=True)
     report.save_html(str(path))
     result = report.as_dict()["metrics"][0]["result"]
@@ -331,7 +354,7 @@ def monitor(frame: pd.DataFrame, cfg: dict, model: str = "auto", scenario: str =
         predict, _, info = fit_local(reference, cfg)
 
     # ---- data drift ----
-    # data drift ดูเฉพาะ N วันล่าสุด (ไม่ใช่ทั้งช่วง current) → ไวต่อการเปลี่ยนล่าสุด และ lag_14 ไม่ลากค่าจากช่วงก่อนหน้ามาปน
+    # data drift ดูเฉพาะ N วันล่าสุด (ไม่ใช่ทั้งช่วง current) → ไวต่อการเปลี่ยนล่าสุด
     since = current["date"].max() - pd.Timedelta(days=mon.get("drift_window_days", 14))
     recent = current[current["date"] > since]
     data = check_data_drift(reference, recent, mon["psi_threshold"])
@@ -466,9 +489,8 @@ def main(argv: list[str] | None = None) -> int:
     for name, (frame, start) in runs.items():
         summary, daily, (reference, current) = monitor(frame, cfg, args.model, name, drift_start=start)
         if not args.no_evidently:
-            cols = [c for c in MONITORED_FEATURES if c in reference.columns]
             summary["data_drift"]["evidently"] = evidently_report(
-                reference, current, cols, cfg["monitoring"]["psi_threshold"],
+                reference, current, ALERT_FEATURES, cfg["monitoring"]["psi_threshold"],
                 REPORT_DIR / f"p6_{name}_data_drift.html")
         if args.retrain and summary["retrain"]["needed"]:
             summary["retrain"]["run"] = trigger_retrain(cfg)

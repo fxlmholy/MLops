@@ -7,7 +7,8 @@
     │ scenario     │ qty (ใช้สร้าง feature = X)     │ actual (ยอดจริง = y)           │
     ├──────────────┼──────────────────────────────┼──────────────────────────────┤
     │ normal       │ เหมือนเดิม                     │ = qty                        │
-    │ data_drift   │ ครึ่งหนึ่งของสินค้า × 1.5 (ช่วงท่องเที่ยว) │ = qty  (ความสัมพันธ์ X→y เดิม)   │
+    │ data_drift   │ สินค้าครึ่งหนึ่ง × 2, อีกครึ่ง ÷ 2   │ = qty  (ความสัมพันธ์ X→y เดิม)   │
+    │              │ (สัดส่วนสินค้าเปลี่ยน เช่น เมนู/โปรใหม่)│                              │
     │ concept_drift│ เหมือนเดิม                     │ = qty × 0.6 (คู่แข่งเปิดร้าน)      │
     └──────────────┴──────────────────────────────┴──────────────────────────────┘
 
@@ -53,15 +54,21 @@ def drifted_articles(articles) -> list[str]:
     return sorted(set(articles))[::2]
 
 
-def make_data_drift(df: pd.DataFrame, factor: float = 1.5, start=None) -> pd.DataFrame:
-    """Data drift: ตั้งแต่ `start` ยอดของครึ่งหนึ่งของสินค้า × factor (สัดส่วนสินค้าเปลี่ยน + ระดับยอดเปลี่ยน)
+def make_data_drift(df: pd.DataFrame, factor: float = 2.0, start=None) -> pd.DataFrame:
+    """Data drift: ตั้งแต่ `start` สินค้าครึ่งหนึ่ง × factor และอีกครึ่ง ÷ factor (product mix เปลี่ยน)
+
+    ทำไมไม่คูณขึ้นอย่างเดียว: ข้อมูลจริง ก.ย. ยอดต่ำกว่าค่าเฉลี่ยทั้งปี การคูณ 1.5 กลับดึงยอดเข้าใกล้ค่าเฉลี่ย
+    PSI จึงลดลง (0.16 < normal) → เปลี่ยนสัดส่วนสินค้าแทน ซึ่งไม่ขึ้นกับฤดูกาล
 
     qty ที่เปลี่ยนจะไหลเข้า lag/rolling feature ของวันถัดไป → P(X) เลื่อน, actual = qty (P(y|X) เดิม)
     """
     out = _prepare(df)
     start = pd.Timestamp(start) if start is not None else out["date"].min()
-    mask = (out["date"] >= start) & out["article"].isin(drifted_articles(out["article"]))
-    out.loc[mask, "qty"] = (out.loc[mask, "qty"] * factor).round()
+    after = out["date"] >= start
+    up = after & out["article"].isin(drifted_articles(out["article"]))
+    down = after & ~up
+    out.loc[up, "qty"] = (out.loc[up, "qty"] * factor).round()
+    out.loc[down, "qty"] = (out.loc[down, "qty"] / factor).round()
     out["actual"] = out["qty"]
     return out
 
@@ -90,7 +97,7 @@ def simulate(df: pd.DataFrame, scenario: str, cfg: dict, factor: float | None = 
     if scenario == "normal":
         return make_normal(df)
     if scenario == "data_drift":
-        return make_data_drift(df, factor or mon.get("data_drift_factor", 1.5), start)
+        return make_data_drift(df, factor or mon.get("data_drift_factor", 2.0), start)
     if scenario == "concept_drift":
         return make_concept_drift(df, factor or mon.get("concept_drift_factor", 0.6), start)
     raise ValueError(f"unknown scenario '{scenario}' (ใช้ได้: {', '.join(SCENARIOS)})")
