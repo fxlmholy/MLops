@@ -355,7 +355,7 @@ locust -f loadtest/locustfile.py --headless -u 50 -r 10 -t 60s --host http://127
 ---
 
 ## §8 Pipeline DAG
-**ผู้รับผิดชอบ:** M2 (@NongPP235) · **Reviewer:** M1 (@nattapongsric-collab) · **PR:** # · **วันที่เสร็จ:** 2026-10-06
+**ผู้รับผิดชอบ:** M2 (@NongPP235) · **Reviewer:** M1 (@nattapongsric-collab) · **PR:** #20 · **วันที่เสร็จ:** 2026-10-06
 
 ### สิ่งที่ทำ
 - `src/flow.py` — Prefect 2 flow `bakery-demand-pipeline` 7 task เรียงเป็น DAG:
