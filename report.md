@@ -15,8 +15,8 @@
 | 7 | Monitoring, Drift & Retraining | M5 | 🟨 |
 | 8 | Pipeline DAG | M2 | 🟨 |
 | 9 | CI/CD | M5 | 🟨 |
-| 10 | Architecture, Reproducibility & สรุป | M1 | ⬜ |
-| 11 | สรุปการใช้ AI (รวมจากทุก section) | M1 | ⬜ |
+| 10 | Architecture, Reproducibility & สรุป | M1 | 🟨 |
+| 11 | สรุปการใช้ AI (รวมจากทุก section) | M1 | 🟨 |
 
 ---
 
@@ -586,16 +586,104 @@ docker build -t bakery-api .
 ---
 
 ## §10 Architecture, Reproducibility & สรุป
-**ผู้รับผิดชอบ:** M1 · **Reviewer:** M5 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M1 (@nattapongsric-collab) · **Reviewer:** M5 (@thanachotkam-hue) · **PR:** # · **วันที่เสร็จ:** 2026-10-05
 
 ### แผนภาพสถาปัตยกรรม
+![Architecture](docs/architecture.png)
+
+ระบบแบ่งเป็น 5 ส่วน:
+
+| ส่วน | หน้าที่ | เครื่องมือ | ผู้รับผิดชอบ |
+|---|---|---|---|
+| Training pipeline | ingest → validate → split → features → train → gate → register รันด้วยคำสั่งเดียว | Prefect 2, Pandera, LightGBM | M2, M3, M4 |
+| Experiment tracking & Registry | log ครบ 6 อย่าง (code, data, params, metrics, artifacts, env) และจัดการ alias `champion`/`challenger` | MLflow | M3, M4 |
+| Serving | Batch ทุกคืนก่อน 06:00 + Real-time API, คำนวณจำนวนที่ควรเตรียมแบบ newsvendor | FastAPI, Docker compose | M4 |
+| Monitoring & Retraining | system health, data drift (PSI), concept drift (rolling WAPE) → alert → retrain | Prometheus, Grafana, Evidently | M5 |
+| CI/CD | code quality, data validation, model gate, build image ทุก PR | GitHub Actions | M5 |
+
+**จุดออกแบบสำคัญ**
+- **กัน Training–Serving skew:** ทั้ง training และ API เรียก `build_features()` จาก `src/features.py` ที่เดียว
+- **ข้อมูลเสียไม่หลุดเข้าโมเดล:** validate ไม่ผ่าน → flow หยุดก่อน train
+- **โมเดลแย่ไม่ถูก deploy:** ต้องผ่าน gate ทุกข้อใน `configs/config.yaml` → `gate`
+- **ย้อนกลับได้ทันที:** rollback = ย้าย alias `champion` ใน MLflow Registry ไม่ต้อง build ใหม่
+- **ปิดวงจร:** monitoring ตรวจพบ drift → trigger training flow → gate → registry → API โหลด champion ใหม่
+
+### Reproducibility
+| สิ่งที่ล็อกไว้ | วิธี |
+|---|---|
+| Random seed | `seed: 42` ใน `configs/config.yaml` |
+| Library | pin ทุกตัวด้วย `==` ใน `requirements.txt` |
+| Code version | `git rev-parse HEAD` → MLflow tag |
+| Data version | SHA256 ของไฟล์ raw → MLflow tag |
+| Environment | Python 3.11 (conda) + Docker image `python:3.11-slim` |
+| การแบ่งข้อมูล | แบ่งตามวันที่ใน config (ไม่สุ่ม) |
+| ค่าตั้งทั้งหมด | `configs/config.yaml` ไฟล์เดียว |
+
 ### ผลทดสอบรันจากเครื่องเปล่า
+**ยืนยันแล้ว (บนเครื่องของ M4 ด้วยข้อมูล Kaggle จริง — ดู [`p5_api_demo.txt`](docs/evidence/p5_api_demo.txt)):**
+`docker compose up -d --build` → mlflow healthy → `ingest` → `train` → `evaluate_gate` → `POST /reload` → API ตอบ `/predict` `/recommend` ได้ และ Prometheus scrape API ได้ (`up = 1`)
+
+**ทดสอบบนเครื่องที่ไม่เคยรัน** (clone ใหม่ ทำตาม [`README.md`](README.md) ทีละขั้น):
+
+| ขั้นตอนใน README | ผล | หมายเหตุ / สิ่งที่ต้องแก้ |
+|---|---|---|
+| clone + `pip install -r requirements.txt` | ⬜ | |
+| วาง `data/raw/Bakery sales.csv` | ⬜ | |
+| `docker compose up -d --build` | ⬜ | |
+| `ingest` → `validate` → `train` → `evaluate_gate` | ⬜ | |
+| `POST /reload` + `curl /recommend` | ⬜ | |
+| `python -m src.validate data/samples/bad_sales.csv` ล้ม (exit 1) | ⬜ | |
+| `make pipeline` (P7) | ⬜ | รอ P7 |
+
+ผู้ทดสอบ: · เครื่อง/OS: · วันที่:
+
 ### สรุปผลเชิงธุรกิจ
+**โมเดลที่ใช้งาน:** LightGBM (default) = `@champion` v1 — เลือกด้วย WAPE บน validation ตามเกณฑ์ใน §1
+
+| ตัวชี้วัด | Seasonal-naive (วิธีเดิมของร้าน) | LightGBM (champion) | เปลี่ยนแปลง | ที่มา |
+|---|---|---|---|---|
+| WAPE (validation, ข้อมูลจริงผ่าน pipeline ของ M2) | 28.8% | **19.2%** | **ดีขึ้น 33%** (gate ต้อง ≥ 10% ✅) | §5 |
+| Stockout proxy | 1.326 | 1.026 | **ลดลง 23%** | §4 |
+| Waste proxy | 1.183 | 0.825 | **ลดลง 30%** | §4 |
+| Lost profit / วัน | — | — | ยังไม่ได้คำนวณ | — |
+
+| SLO (§1) | เป้า | วัดได้ (docker, 50 users) | ผ่าน? |
+|---|---|---|---|
+| p95 latency | < 200 ms | 18–19 ms | ✅ |
+| Error rate | < 1% | 0% | ✅ |
+| ขนาดโมเดล | < 50 MB | 0.26 MB | ✅ |
+| Throughput | – | 155 req/s | ✅ (ร้านเดียวใช้ไม่ถึง) |
+
+**สรุป:** เมื่อเทียบกับวิธีที่ร้านใช้อยู่ ("เท่าวันเดียวกันสัปดาห์ก่อน") โมเดลคลาดเคลื่อนน้อยลงประมาณหนึ่งในสาม และเมื่อแปลงเป็นจำนวนที่ควรเตรียมแบบ newsvendor ทำให้ทั้งของขาดและของเหลือทิ้งลดลง ระบบตอบเร็วกว่า SLO ประมาณ 10 เท่า
+
+> **หมายเหตุความสอดคล้องของตัวเลข:** ตารางใน §4 (M3) ได้ WAPE naive 36.8% / LightGBM 27.1% ซึ่งต่างจาก §5 (M4) เพราะรันคนละรอบข้อมูล ตัวเลข WAPE ในตารางนี้ใช้ของ §5 ซึ่งรันผ่าน `ingest` ของ M2 กับข้อมูล Kaggle จริง ส่วน stockout/waste proxy ยังเป็นของ §4 — **M3 ควรรัน `train.py` ใหม่บนข้อมูลเดียวกันแล้วอัปเดต §4** ให้ตัวเลขตรงกันก่อน release
+
 ### ข้อจำกัดและงานในอนาคต
+- **ข้อมูลจากร้านเดียว ช่วง 2021–2022** — โมเดลอาจใช้กับร้านอื่นหรือช่วงเวลาอื่นไม่ได้ทันที ต้องเทรนใหม่ด้วยข้อมูลของร้านนั้น
+- **ไม่มีข้อมูลสต็อกจริง** — ยอดขายที่เห็นคือยอดที่ขายได้ ไม่ใช่ความต้องการจริง วันที่ของหมดเร็วจะทำให้ประเมินความต้องการต่ำไป (censored demand)
+- **ไม่มี feature ภายนอก** เช่น สภาพอากาศ, โปรโมชัน, อีเวนต์ในพื้นที่ — อนาคตเพิ่มได้ผ่าน `build_features()`
+- **ต้นทุนสินค้าเป็นค่าสมมุติ** — q ของ newsvendor ขึ้นกับราคา/ต้นทุน ถ้าใช้จริงต้องใช้ต้นทุนจริงของร้าน
+- **รันบนเครื่องเดียว** — ถ้าขยายหลายสาขา ควรแยก MLflow/DB ไปที่ server กลางและใช้ Prefect work pool
+- **p_q มาจาก residual บน validation** (§6) ไม่ใช่โมเดล quantile โดยตรง — ถ้าข้อมูล drift ต้อง retrain เพื่อคำนวณ residual ใหม่ด้วย
+- **`item_encoded` อิงลำดับสินค้าในข้อมูล** (ข้อสังเกตจาก M4 §6) — ถ้าเพิ่ม/ลดสินค้า ต้อง retrain ทั้งโมเดล
 
 ---
 
 ## §11 สรุปการใช้ AI
+> M1 รวบรวมจากหัวข้อ "การใช้ AI" ของทุก section — แต่ละคนกรอกแถวของตัวเองใน section ของตัวเองก่อน แล้ว M1 สรุปมาที่นี่
+
 | ส่วนของงาน | เครื่องมือ AI | ใช้ช่วยทำอะไร | ผู้ตรวจสอบ/อธิบายได้ |
 |---|---|---|---|
-| | | | |
+| P0 Setup | Claude Code | ตั้งค่า git (ชื่อ/อีเมล), แตก branch, ช่วยเปิด PR | M1 |
+| §1 Problem Framing | Claude Code | ร่างคำตอบ 5 คำถาม, เหตุผลเลือก metric, จัดตาราง metric/gate/SLO | M1 |
+| §10 Architecture & README | Claude Code | ร่างแผนภาพสถาปัตยกรรม (สคริปต์ matplotlib), ปรับ README, ร่าง §10 | M1 |
+| §2 Data | Claude Code | เขียน `ingest.py`, `validate.py`, `split_from_config()`, `tests/test_data.py` และร่าง §2 | M2 — ตรวจด้วย ruff + pytest และรันกับไฟล์ดี/เสีย |
+| §3–§4 Features & Model | AI (ไม่ระบุเครื่องมือ) | วางแนวทาง feature, ตรวจ data leakage, ออกแบบ test, โค้ด train + MLflow tracking และจัดทำรายงาน | M3 — ตรวจผลการรันและผล test ก่อนใช้ |
+| §5–§6 Registry & Serving | Claude Code | เขียน `evaluate_gate.py`, `registry.py`, `api/*`, test, locustfile, docker-compose และร่าง §5–§6 | M4 — รัน pytest, ยิง API ทุก endpoint, ทดสอบ promote/rollback และ Locust |
+| §7 Monitoring | (รอ M5) | | M5 |
+| §8 Pipeline DAG | (รอ M2) | | M2 |
+| §9 CI/CD | (รอ M5) | | M5 |
+
+**สรุป:** ทุกคนที่ส่งงานแล้วใช้ AI ช่วยเขียนโค้ดและร่างรายงาน และทุกคนตรวจสอบด้วยการรัน test / รันกับข้อมูลจริงก่อน merge — การตัดสินใจหลัก (metric, เกณฑ์ gate, การเลือกโมเดล, วิธีแก้ปัญหาเช่น p95 240 ms → 19 ms ใน §6) ผู้รับผิดชอบแต่ละส่วนเป็นผู้ตรวจและยืนยัน พร้อมเขียนเหตุผลไว้ใน section ของตัวเอง
+
+**หลักการที่ทีมใช้:** AI ช่วยร่างโค้ด/เอกสารได้ แต่เจ้าของงานต้องอ่านทุกบรรทัด รันทดสอบเอง และอธิบายได้ตอนนำเสนอ (CLAUDE.md §1 ข้อ 6)
