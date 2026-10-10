@@ -6,7 +6,72 @@
 
 > คู่มือทีม: [`CLAUDE.md`](CLAUDE.md) · รายงาน: [`report.md`](report.md)
 
+## 📊 Dashboard ภาพรวม
+
+| WAPE (champion) | ดีกว่า rule เดิม | p95 latency | Throughput | Error rate | Champion |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| **0.192** | **−33%** | **19 ms** <br><sub>เป้า &lt; 200 ms</sub> | **155 req/s** <br><sub>50 users</sub> | **0%** | **v1** <br><sub>LightGBM · 0.26 MB</sub> |
+
+| โมเดล (validation) | WAPE | ผ่าน gate? |
+|---|:---:|:---:|
+| Seasonal-naive (rule เดิม) | 0.288 | baseline |
+| Linear Regression | 0.223 | ✅ (แพ้ champion → challenger) |
+| LightGBM tuned + holiday | 0.197 | ✅ |
+| **LightGBM default** | **0.192** | ✅ **champion v1** |
+
+> Gate: WAPE ดีกว่า seasonal-naive ≥ 10% · โมเดล < 50 MB · p95 < 200 ms · ข้อมูลผ่าน schema — รายละเอียด report §4–§6
+
+## 🏗️ MLOps Architecture
+
+```mermaid
+flowchart LR
+    subgraph DATA["1 · ข้อมูล (M2)"]
+        A[("Bakery sales.csv<br/>Kaggle 234k แถว")] --> B["ingest.py<br/>รวมเป็นยอดรายวัน×สินค้า"]
+        B --> C{"validate.py<br/>Pandera"}
+        C -- ข้อมูลเสีย --> X["❌ หยุด pipeline<br/>exit 1"]
+        C -- ผ่าน --> D["split.py<br/>แบ่งตามเวลา"]
+    end
+    subgraph TRAIN["2 · เทรน & ประเมิน (M3)"]
+        D --> E["features.py<br/>build_features()"]
+        E --> F["train.py<br/>4 โมเดล · LightGBM"]
+        F --> G[("MLflow Tracking<br/>log 6 อย่าง")]
+    end
+    subgraph APPROVE["3 · อนุมัติ (M4)"]
+        G --> H{"evaluate_gate.py<br/>ผ่านเกณฑ์?"}
+        H -- ไม่ผ่าน --> R["reject<br/>ไม่ลงทะเบียน"]
+        H -- ผ่าน --> I[("Model Registry<br/>challenger → champion")]
+    end
+    subgraph SERVE["4 · ให้บริการ (M4)"]
+        I --> J["FastAPI ใน Docker<br/>/predict · /recommend"]
+        I --> K["Batch ทุกคืน<br/>พยากรณ์พรุ่งนี้ทุกสินค้า"]
+    end
+    subgraph MONITOR["5 · เฝ้าระวัง & รีเทรน (M5)"]
+        J --> L["Prometheus + Grafana<br/>latency · error"]
+        J --> M["Evidently<br/>data drift · concept drift"]
+        L --> N{"alert?"}
+        M --> N
+        N -- "ใช่ / ครบ 7 วัน" --> F
+    end
+    E -. "ฟังก์ชันเดียวกัน<br/>(กัน skew)" .-> J
+```
+
+| ขั้น | ทำอะไร | เครื่องมือ | ผู้รับผิดชอบ |
+|---|---|---|:---:|
+| ข้อมูล | ทำความสะอาด รวมยอดรายวัน แบ่ง train/val/test ตามเวลา | pandas | M2 |
+| ตรวจสอบ | schema, qty ≥ 0, สินค้าที่รู้จัก, วันไม่หาย → ข้อมูลเสียหยุดทันที | Pandera | M2 |
+| เทรน | lag / rolling / วันหยุด · ทดลอง 4 โมเดล | LightGBM, scikit-learn | M3 |
+| ประเมิน | log code, data, params, metrics, artifacts, env | MLflow Tracking | M3 |
+| อนุมัติ | gate → challenger → champion · rollback คำสั่งเดียว | MLflow Registry | M4 |
+| ให้บริการ | API real-time + batch ทุกคืน · 422 กับ input ผิด | FastAPI, Docker | M4 |
+| เฝ้าระวัง | PSI > 0.2 (data drift) · WAPE 7 วัน > 1.2× (concept drift) · p95 / error | Evidently, Prometheus, Grafana | M5 |
+| รีเทรน | ทุก 7 วัน หรือเมื่อมี alert → ผ่าน gate อีกรอบ | Prefect, GitHub Actions | M5 |
+
+<details>
+<summary>แผนภาพสถาปัตยกรรมแบบเต็ม (รูป)</summary>
+
 ![Architecture](docs/architecture.png)
+
+</details>
 
 ## สิ่งที่ต้องมีในเครื่อง
 | เครื่องมือ | เวอร์ชัน | ใช้ทำอะไร |
