@@ -8,8 +8,8 @@
 | 0 | สมาชิกและการแบ่งงาน | M1 + ทุกคน | ⬜ |
 | 1 | Problem Framing & AI Project Canvas | M1 | ✅ |
 | 2 | Data Ingestion, Split & Validation | M2 | ✅ |
-| 3 | Feature Engineering | M3 | ⬜ |
-| 4 | Model Development & Experiment Tracking | M3 | ⬜ |
+| 3 | Feature Engineering | M3 | ✅ |
+| 4 | Model Development & Experiment Tracking | M3 | ✅ |
 | 5 | Model Registry, Gate & Rollback | M4 | ✅ |
 | 6 | Serving, Infrastructure & Load Test | M4 | ✅ |
 | 7 | Monitoring, Drift & Retraining | M5 | 🟨 |
@@ -145,7 +145,7 @@ pytest -q tests/test_data.py
 ---
 
 ## §3 Feature Engineering
-**ผู้รับผิดชอบ:** M3 · **Reviewer:** M2 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M3 · **Reviewer:** M2 · **PR:** #8 · **วันที่เสร็จ:**2026-10-04
 
 ### สิ่งที่ทำ พัฒนา src/features.py เพื่อสร้างคุณลักษณะสำหรับการพยากรณ์ยอดขายรายวันของสินค้าแต่ละชนิด โดยใช้ build_features(history_df, target_date) คุณลักษณะที่สร้างประกอบด้วย
 Lag features: lag_1, lag_7, lag_14
@@ -168,7 +168,7 @@ conda run -n mlops-m3 python -m pytest tests/test_features.py -v
 ---
 
 ## §4 Model Development & Experiment Tracking
-**ผู้รับผิดชอบ:** M3 · **Reviewer:** M2 · **PR:** # · **วันที่เสร็จ:**
+**ผู้รับผิดชอบ:** M3 · **Reviewer:** M2 · **PR:**#8, #16 · **วันที่เสร็จ:**2026-10-05
 
 ### สิ่งที่ทำ พัฒนา src/train.py สำหรับเตรียมข้อมูลยอดขายรายวัน สร้าง Features ฝึกโมเดล 4 แบบ และบันทึกผลการทดลองด้วย MLflow ได้แก่ Seasonal-naive, Linear Regression, LightGBM default และ LightGBM tuned โดยบันทึกพารามิเตอร์ ตัวชี้วัด รุ่นโค้ด ค่า SHA256 ของ Dataset เวอร์ชัน Python ไฟล์ requirements.txt รายการ Features โมเดล กราฟ Actual vs Predicted และผลวิเคราะห์ SHAP สำหรับโมเดลที่รองรับ
 ### การตัดสินใจและเหตุผล ใช้ WAPE เป็นตัวชี้วัดหลักสำหรับเปรียบเทียบโมเดลบน Validation set เนื่องจากต้องการประเมินความคลาดเคลื่อนเทียบกับยอดขายจริง เลือกโมเดลจากผล Validation และใช้ Test set สำหรับรายงานผลประเมินขั้นสุดท้ายเท่านั้น
