@@ -21,7 +21,7 @@
 
 > Gate: WAPE ดีกว่า seasonal-naive ≥ 10% · โมเดล < 50 MB · p95 < 200 ms · ข้อมูลผ่าน schema — รายละเอียด report §4–§6
 
-## 🏗️ MLOps Architecture
+##  MLOps Architecture
 
 ```mermaid
 flowchart LR
