@@ -241,8 +241,7 @@ Screenshot MLflow Model Registry (v1 = `@champion`, v2 = `archived` + `rolled_ba
 - MLflow file store คืนเลขเวอร์ชันเป็น int แต่ server คืนเป็น str → เทียบด้วย `str()` เสมอ
 
 ### การใช้ AI
-- ใช้ Claude (Claude Code) ช่วยเขียน `evaluate_gate.py`, `registry.py`, test และร่างรายงานส่วนนี้; ตรวจสอบโดยรัน pytest, รันเต็มวงจร train → gate → promote → rollback กับ MLflow server จริง และอ่านโค้ดทุกบรรทัดก่อน commit
-
+- ใช้ Claude (Claude Code) ช่วยเขียน `evaluate_gate.py`, `registry.py`, test และร่างรายงานส่วนนี้
 ### วิธีรัน/ทดสอบส่วนนี้
 ```bash
 pytest -q tests/test_registry_gate.py          # unit test (ไม่ต้องเปิด MLflow)
@@ -318,7 +317,7 @@ Screenshot `POST /recommend` จากหน้า `/docs` (Swagger UI) — ต�
 - ข้อสังเกตให้ M3: `item_encoded` คิดจาก `factorize` ของสินค้าที่อยู่ในข้อมูล → ถ้าตอน train กับตอน serve มีชุดสินค้าไม่เท่ากัน รหัสจะเลื่อน (API แก้ฝั่งตัวเองโดยใช้ข้อมูลชุดเดียวกับที่ train เขียนไว้ทั้งหมด) แนะนำให้ log รายชื่อสินค้าเป็น artifact ของ run
 
 ### การใช้ AI
-- ใช้ Claude (Claude Code) ช่วยเขียน `api/model_service.py`, `api/main.py`, `api/schemas.py`, test, locustfile, docker-compose และร่างรายงานส่วนนี้; ตรวจสอบโดยรัน pytest, ยิง API จริงทุก endpoint, ทดสอบ promote/rollback + reload, รัน Locust และอ่านโค้ดทุกบรรทัดก่อน commit
+- ใช้ Claude  ช่วยเขียน `api/model_service.py`, `api/main.py`, `api/schemas.py`, test, locustfile, docker-compose และร่างรายงานส่วนนี้;
 
 ### วิธีรัน/ทดสอบส่วนนี้
 ```bash
@@ -681,7 +680,7 @@ docker build -t bakery-api .
 | §10 Architecture & README | Claude Code | ร่างแผนภาพสถาปัตยกรรม (สคริปต์ matplotlib), ปรับ README, ร่าง §10 | M1 |
 | §2 Data | Claude Code | เขียน `ingest.py`, `validate.py`, `split_from_config()`, `tests/test_data.py` และร่าง §2 | M2 — ตรวจด้วย ruff + pytest และรันกับไฟล์ดี/เสีย |
 | §3–§4 Features & Model | AI (ไม่ระบุเครื่องมือ) | วางแนวทาง feature, ตรวจ data leakage, ออกแบบ test, โค้ด train + MLflow tracking และจัดทำรายงาน | M3 — ตรวจผลการรันและผล test ก่อนใช้ |
-| §5–§6 Registry & Serving | Claude Code | เขียน `evaluate_gate.py`, `registry.py`, `api/*`, test, locustfile, docker-compose และร่าง §5–§6 | M4 — รัน pytest, ยิง API ทุก endpoint, ทดสอบ promote/rollback และ Locust |
+| §5–§6 Registry & Serving | Claude Code | เขียน `evaluate_gate.py`, `registry.py`, `api/*`, locustfile, docker-compose และร่าง §5–§6 | M4 —  ทดสอบ promote/rollback และ Locust |
 | §7 Monitoring & Drift | Claude | เขียน `monitor.py`, `simulate_drift.py`, `test_monitor.py`, alert rules, Grafana dashboard และร่าง §7 | M5 — รัน pytest/ruff, `promtool check`, รัน API + Prometheus จริงแล้วทำให้ alert firing |
 | §8 Pipeline DAG | Claude Code | เขียน `flow.py`, `tests/test_flow.py` และร่าง §8 | M2 — รัน ruff/pytest และรัน flow จริงทั้งกรณีผ่านและข้อมูลเสีย |
 | §9 CI/CD | Claude | เขียน `ci.yml`, `make_ci_data.py`, ออกแบบ demo FAIL และร่าง §9 | M5 — รัน model-gate ในเครื่อง ดู run จริงบน GitHub Actions ทั้ง PASS และ FAIL |
