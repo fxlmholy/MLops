@@ -6,7 +6,7 @@
 
 > คู่มือทีม: [`CLAUDE.md`](CLAUDE.md) · รายงาน: [`report.md`](report.md)
 
-## 📊 Dashboard ภาพรวม
+##  Dashboard ภาพรวม
 
 | WAPE (champion) | ดีกว่า rule เดิม | p95 latency | Throughput | Error rate | Champion |
 |:---:|:---:|:---:|:---:|:---:|:---:|
